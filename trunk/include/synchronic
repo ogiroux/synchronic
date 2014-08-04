@@ -1,0 +1,413 @@
+/*
+
+Copyright (c) 2014, NVIDIA Corporation
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this 
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, 
+this list of conditions and the following disclaimer in the documentation 
+and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. 
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, 
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, 
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, 
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE 
+OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED 
+OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
+#ifndef __SYNCHRONIC_H
+#define __SYNCHRONIC_H
+
+#include "./details/config"
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <functional>
+#include <algorithm>
+
+namespace std {
+
+    enum notify_count { 
+        notify_one,
+        notify_all
+    };
+
+    namespace __details {
+
+        template <class S, class T>
+        bool __synchronic_spin_wait_for_update(S const& arg, T const& nval, int attempts) noexcept {
+            int i = 0;
+            for(;i < __SYNCHRONIC_SPIN_RELAX(attempts); ++i)
+                if(__builtin_expect(arg.load(memory_order_relaxed) != nval,1))
+                    return true;
+                else
+                    __synchronic_relax();
+            for(;i < attempts; ++i)
+                if(__builtin_expect(arg.load(memory_order_relaxed) != nval,1))
+                    return true;
+                else
+                    __synchronic_yield();
+            return false;
+        }
+
+        struct __exponential_backoff {
+            __exponential_backoff(int maximum=512) : maximum(maximum), microseconds(8), x(123456789), y(362436069), z(521288629) {
+            }
+            static inline void sleep_for(chrono::microseconds const& time) {
+                auto t = time.count();
+                if(__builtin_expect(t > 75,0))
+                    std::this_thread::sleep_for(time);
+                else if(__builtin_expect(t > 25,0))
+                    __synchronic_yield();
+                else
+                    __synchronic_relax();
+            }
+            void sleep_for_step() {
+                  sleep_for(step());
+            }
+            chrono::microseconds step() {
+                float const f = ranfu();
+                int const t = int(microseconds * f);
+                if(__builtin_expect(f >= 0.95f,0))
+                    microseconds = 8;
+                else
+                    microseconds = (std::min)(microseconds>>1,maximum);
+                return chrono::microseconds(t);
+            }
+        private :
+            int maximum, microseconds, x, y, z;
+            int xorshf96() {
+                int t;
+                x ^= x << 16; x ^= x >> 5; x ^= x << 1;
+                t = x; x = y; y = z; z = t ^ x ^ y;
+                return z;
+            }
+            float ranfu() {
+	            return (float)(xorshf96()&(~0UL>>1)) / (float)(~0UL>>1);
+            }
+        };
+
+        template <class T, class Enable = void>
+        struct __synchronic : public atomic<T> {
+
+            __synchronic() noexcept = default;
+            constexpr __synchronic(T val) noexcept : atomic<T>(val) { }
+            __synchronic(const __synchronic&) = delete;
+            ~__synchronic() { }
+
+            __synchronic& operator=(const __synchronic&) = delete;
+            __synchronic& operator=(const __synchronic&) volatile = delete;
+
+            void store_notify(T val, notify_count, memory_order order = memory_order_seq_cst) noexcept {
+                this->store(val,order);
+            }
+            void store_notify(T val, notify_count, memory_order order = memory_order_seq_cst) volatile noexcept {
+                this->store(val,order);
+            }
+
+            void await_update(T val) const noexcept {
+                if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_A))
+                    return;
+                __exponential_backoff b;
+                while( this->load(memory_order_relaxed) == val ) {
+                    __do_backoff(b);
+                    if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_B))
+                        return;
+                }
+            }
+            void await_update(T val) const volatile noexcept {
+                if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_A))
+                    return;
+                __exponential_backoff b;
+                while( this->load(memory_order_relaxed) == val ) {
+                    __do_backoff(b);
+                    if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_B))
+                        return;
+                }
+            }
+
+            template <class Clock, class Duration>
+            void await_update_until(T val, chrono::time_point<Clock,Duration> const& then) const {
+                if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_A))
+                    return;
+                __exponential_backoff b;
+                std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
+                while( remains > std::chrono::milliseconds::zero() && this->load(memory_order_relaxed) == val ) {
+                    __do_backoff(b);
+                    if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_B))
+                        return;
+                    remains = then - std::chrono::high_resolution_clock::now();
+                }
+            }
+            template <class Clock, class Duration>
+            void await_update_until(T val, chrono::time_point<Clock,Duration> const& then) const volatile {
+                if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_A))
+                    return;
+                __exponential_backoff b;
+                std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
+                while( remains > std::chrono::milliseconds::zero() && this->load(memory_order_relaxed) == val ) {
+                    __do_backoff(b);
+                    if(__synchronic_spin_wait_for_update(*this, val, __SYNCHRONIC_SPIN_COUNT_B))
+                        return;
+                    remains = then - std::chrono::high_resolution_clock::now();
+                }
+            }
+        };
+
+#ifdef __SYNCHRONIC_COMPATIBLE
+        template <class T>
+        struct __synchronic<T, typename enable_if<__SYNCHRONIC_COMPATIBLE(T)>::type> : public atomic<T> {
+
+            __synchronic() noexcept : flag(0) { }
+            constexpr __synchronic(T val) noexcept : atomic<T>(val), flag(0) { }
+            __synchronic(const __synchronic&) = delete;
+            ~__synchronic() { }
+
+            __synchronic& operator=(const __synchronic&) = delete;
+            __synchronic& operator=(const __synchronic&) volatile = delete;
+
+            void store_notify(T val, notify_count count, memory_order order = memory_order_seq_cst) noexcept {
+                this->store(val,order);
+                auto const x = flag.exchange(0,std::memory_order_release);
+                if(__builtin_expect(x,0)) {
+                    std::atomic_thread_fence(std::memory_order_acquire);
+                    if(__builtin_expect(count == notify_all,1))
+                        __synchronic_wake_all(this);
+                    else
+                        __synchronic_wake_one(this);
+                }
+            }
+            void store_notify(T val, notify_count count, memory_order order = memory_order_seq_cst) volatile noexcept {
+                this->store(val,order);
+                auto const x = flag.exchange(0,std::memory_order_release);
+                if(__builtin_expect(x,0)) {
+                    std::atomic_thread_fence(std::memory_order_acquire);
+                    if(__builtin_expect(count == notify_all,1))
+                        __synchronic_wake_all(this);
+                    else
+                        __synchronic_wake_one(this);
+                }
+            }
+
+            void await_update(T val) const noexcept {
+                if(__builtin_expect(__synchronic_spin_wait_for_update(*this, val,__SYNCHRONIC_SPIN_COUNT_A),1))
+                    return;
+                while(this->load(memory_order_relaxed) == val) {
+                    flag.store(1,std::memory_order_relaxed);
+                    std::atomic_thread_fence(std::memory_order_release);
+                    __synchronic_wait(this,val);
+                }
+            }
+            void await_update(T val) const volatile noexcept {
+                if(__builtin_expect(__synchronic_spin_wait_for_update(*this, val,__SYNCHRONIC_SPIN_COUNT_A),1))
+                    return;
+                while(this->load(memory_order_relaxed) == val) {
+                    flag.store(1,std::memory_order_relaxed);
+                    std::atomic_thread_fence(std::memory_order_release);
+                    __synchronic_wait(this,val);
+                }
+            }
+
+            template <class Clock, class Duration>
+            void await_update_until(T val, chrono::time_point<Clock,Duration> const& then) const {
+                if(__synchronic_spin_wait_for_update(*this, val,__SYNCHRONIC_SPIN_COUNT_A))
+                    return;
+                std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
+                while(remains > std::chrono::milliseconds::zero() && this->load(memory_order_relaxed) == val) {
+                    flag.store(1,std::memory_order_relaxed);
+                    std::atomic_thread_fence(std::memory_order_release);
+                    __synchronic_wait_timed(this,val,remains);
+                    remains = then - std::chrono::high_resolution_clock::now();
+                }
+            }
+            template <class Clock, class Duration>
+            void await_update_until(T val, chrono::time_point<Clock,Duration> const& then) const volatile {
+                if(__synchronic_spin_wait_for_update(*this, val,__SYNCHRONIC_SPIN_COUNT_A))
+                    return;
+                std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
+                while(remains > std::chrono::milliseconds::zero() && this->load(memory_order_relaxed) == val) {
+                    flag.store(1,std::memory_order_relaxed);
+                    std::atomic_thread_fence(std::memory_order_release);
+                    __synchronic_wait_timed(this,val,remains);
+                    remains = then - std::chrono::high_resolution_clock::now();
+                }
+            }
+        private:
+            mutable std::atomic<int> flag;
+        };
+#endif
+    }
+
+    template <class T>
+    struct synchronic : public __details::__synchronic<T> {
+
+        synchronic() noexcept = default;
+        constexpr synchronic(T val) noexcept : __details::__synchronic<T>(val) { }
+        synchronic(const synchronic&) = delete;
+        ~synchronic() { }
+
+        synchronic& operator=(const synchronic&) = delete;
+        synchronic& operator=(const synchronic&) volatile = delete;
+        T operator=(T val) noexcept {
+            return atomic<T>::operator=(val);
+        }
+        T operator=(T val) volatile noexcept {
+            return atomic<T>::operator=(val);
+        }
+
+        T load_when_updated(T val, memory_order order = memory_order_seq_cst) const noexcept {
+            this->await_update(val);
+            return this->load(order);
+        }
+        T load_when_updated(T val, memory_order order = memory_order_seq_cst) const volatile noexcept {
+            this->await_update(val);
+            return this->load(order);
+        }
+
+        T load_when_equal(T val, memory_order order = memory_order_seq_cst) const noexcept {
+            for(T nval = this->load(memory_order_relaxed); nval != val; nval = this->load(memory_order_relaxed))
+                this->await_update(nval);
+            return this->load(order);
+        }
+        T load_when_equal(T val, memory_order order = memory_order_seq_cst) const volatile noexcept {
+            for(T nval = this->load(memory_order_relaxed); nval != val; nval = this->load(memory_order_relaxed))
+                this->await_update(nval);
+            return this->load(order);
+        }
+
+        template <class Rep, class Period>
+        void await_update_for(T val, chrono::duration<Rep,Period> const& delta) const {
+            this->await_update_until(val, std::chrono::high_resolution_clock::now() + delta);
+        }
+        template < class Rep, class Period>
+        void await_update_for(T val, chrono::duration<Rep,Period> const& delta) const volatile {
+            this->await_update_until(val, std::chrono::high_resolution_clock::now() + delta);
+        }
+    };
+
+    template <class T>
+    void synchronic_init(synchronic<T> * obj, T val) noexcept {
+        new (obj) synchronic<T>(val);
+    }
+    template <class T>
+    void synchronic_init(volatile synchronic<T> * obj, T val) noexcept {
+        new (obj) synchronic<T>(val);
+    }
+
+    template <class T>
+    T synchronic_load_when_updated(const synchronic<T> * obj, T val) noexcept {
+        obj->load_when_updated(val);
+    }
+    template <class T>
+    T synchronic_load_when_updated_explicit(const synchronic<T> * obj, T val, memory_order order) noexcept {
+        obj->load_when_updated(val,order);
+    }
+    template <class T>
+    T synchronic_load_when_updated(const volatile synchronic<T> * obj, T val) noexcept {
+        obj->load_when_updated(val);
+    }
+    template <class T>
+    T synchronic_load_when_updated_explicit(const volatile synchronic<T> * obj, T val, memory_order order) noexcept {
+        obj->load_when_updated(val,order);
+    }
+
+    template <class T>
+    T synchronic_load_when_equal(const synchronic<T> * obj, T val) noexcept {
+        obj->load_when_equal(val);
+    }
+    template <class T>
+    T synchronic_load_when_equal_explicit(const synchronic<T> * obj, T val, memory_order order) noexcept {
+        obj->load_when_equal(val,order);
+    }
+    template <class T>
+    T synchronic_load_when_equal(const volatile synchronic<T> * obj, T val) noexcept {
+        obj->load_when_equal(val);
+    }
+    template <class T>
+    T synchronic_load_when_equal_explicit(const volatile synchronic<T> * obj, T val, memory_order order) noexcept {
+        obj->load_when_equal(val,order);
+    }
+
+    template <class T>
+    void synchronic_store_notify(synchronic<T> * obj, T val) noexcept {
+        obj->store_notify(val);
+    }
+    template <class T>
+    void synchronic_store_notify_explicit(synchronic<T> * obj, T val, memory_order order) noexcept {
+        obj->store_notify(val, order);
+    }
+    template <class T>
+    void synchronic_store_notify(volatile synchronic<T> * obj, T val) noexcept {
+        obj->store_notify(val);
+    }
+    template <class T>
+    void synchronic_store_notify_explicit(volatile synchronic<T> * obj, T val, memory_order order) noexcept {
+        obj->store_notify(val, order);
+    }
+
+    template <class T>
+    void synchronic_await_update(const synchronic<T> * obj, T val) noexcept {
+        obj->await_update(val);
+    }
+    template <class T>
+    void synchronic_await_update(const volatile synchronic<T> * obj, T val) noexcept {
+        obj->await_update(val);
+    }
+}
+
+#include <inttypes.h>
+
+namespace std {
+
+    typedef synchronic<char> synchronic_char;
+    typedef synchronic<char> synchronic_schar;
+    typedef synchronic<unsigned char> synchronic_uchar;
+    typedef synchronic<short> synchronic_short;
+    typedef synchronic<unsigned short> synchronic_ushort;
+    typedef synchronic<int> synchronic_int;
+    typedef synchronic<unsigned int> synchronic_uint;
+    typedef synchronic<long> synchronic_long;
+    typedef synchronic<unsigned long> synchronic_ulong;
+    typedef synchronic<long long> synchronic_llong;
+    typedef synchronic<unsigned long long> synchronic_ullong;
+    //typedef synchronic<char16_t> synchronic_char16_t;
+    //typedef synchronic<char32_t> synchronic_char32_t;
+    typedef synchronic<wchar_t> synchronic_wchar_t;
+
+    typedef synchronic<int_least8_t> synchronic_int_least8_t;
+    typedef synchronic<uint_least8_t> synchronic_uint_least8_t;
+    typedef synchronic<int_least16_t> synchronic_int_least16_t;
+    typedef synchronic<uint_least16_t> synchronic_uint_least16_t;
+    typedef synchronic<int_least32_t> synchronic_int_least32_t;
+    typedef synchronic<uint_least32_t> synchronic_uint_least32_t;
+    //typedef synchronic<int_least_64_t> synchronic_int_least_64_t;
+    typedef synchronic<uint_least64_t> synchronic_uint_least64_t;
+    typedef synchronic<int_fast8_t> synchronic_int_fast8_t;
+    typedef synchronic<uint_fast8_t> synchronic_uint_fast8_t;
+    typedef synchronic<int_fast16_t> synchronic_int_fast16_t;
+    typedef synchronic<uint_fast16_t> synchronic_uint_fast16_t;
+    typedef synchronic<int_fast32_t> synchronic_int_fast32_t;
+    typedef synchronic<uint_fast32_t> synchronic_uint_fast32_t;
+    typedef synchronic<int_fast64_t> synchronic_int_fast64_t;
+    typedef synchronic<uint_fast64_t> synchronic_uint_fast64_t;
+    typedef synchronic<intptr_t> synchronic_intptr_t;
+    typedef synchronic<uintptr_t> synchronic_uintptr_t;
+    typedef synchronic<size_t> synchronic_size_t;
+    typedef synchronic<ptrdiff_t> synchronic_ptrdiff_t;
+    typedef synchronic<intmax_t> synchronic_intmax_t;
+    typedef synchronic<uintmax_t> synchronic_uintmax_t;
+}
+
+#endif //__SYNCHRONIC_H
