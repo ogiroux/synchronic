@@ -69,12 +69,12 @@ struct ttas_mutex {
             bool state = false;
             if(locked.compare_exchange_weak(state,true,std::memory_order_relaxed))
                 break;
-            locked.await_update(true);
+            locked.expect_update(true);
         }
         std::atomic_thread_fence(std::memory_order_acquire);
     }
     void unlock() {
-        locked.store_notify(false,std::notify_all,std::memory_order_release);
+        locked.store(false,std::memory_order_release);
     }
 
 private :
@@ -96,7 +96,7 @@ struct ticket_mutex {
     }
 
     void unlock() {
-        active.store_notify(active.load(std::memory_order_relaxed)+1,std::notify_all,std::memory_order_release);
+        active.fetch_add(1,std::memory_order_release);
     }
 private :
     std::synchronic<int> active;
@@ -117,7 +117,7 @@ struct mcs_mutex {
 
             unique_lock * const head = m.head.exchange(this,std::memory_order_acquire);
             if(__builtin_expect(head != nullptr,0)) {
-                head->next.store_notify(this,std::notify_one,std::memory_order_seq_cst);
+                head->next.store(this,std::memory_order_seq_cst,std::notify_one);
                 while(!ready.load_when_updated(false,std::memory_order_acquire))
                     ;
             }
@@ -132,7 +132,7 @@ struct mcs_mutex {
                 unique_lock * n = next.load(std::memory_order_relaxed);
                 while(!n) 
                     n = next.load_when_updated(n,std::memory_order_relaxed);
-                n->ready.store_notify(true,std::notify_one,std::memory_order_release);
+                n->ready.store(true,std::memory_order_release,std::notify_one);
             }
         }
 

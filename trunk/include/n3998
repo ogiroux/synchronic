@@ -70,7 +70,7 @@ namespace std {
         bool __arrive( ) { 
             if(count.fetch_add(-1,std::memory_order_release)!=1)
                 return false;
-            released.store_notify(true,std::notify_all,std::memory_order_release);
+            released.store(true,std::memory_order_release);
             return true;
         }
         atomic<int> count;
@@ -107,7 +107,7 @@ namespace std {
             if(__builtin_expect(myresult == expected,0)) {
                 expected = nexpected.load(memory_order_relaxed);
                 arrived.store(0,memory_order_relaxed);
-                epoch.store_notify(myepoch+1,std::notify_all,memory_order_release);
+                epoch.store(myepoch+1,memory_order_release);
                 return true;
             }
             return false;
@@ -147,7 +147,7 @@ namespace std {
                 int const newexpected = completion();
                 expected = newexpected ? newexpected : nexpected.load(memory_order_relaxed);
                 arrived.store(0,memory_order_relaxed);
-                epoch.store_notify(myepoch+1,std::notify_all,memory_order_release);
+                epoch.store(myepoch+1,memory_order_release);
                 return true;
             }
             return false;
