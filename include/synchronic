@@ -275,52 +275,52 @@ namespace std {
 
             T fetch_add(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
                 auto const t = atom.fetch_add(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_add(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
                 auto const t = atom.fetch_add(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_sub(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
                 auto const t = atom.fetch_sub(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_sub(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
                 auto const t = atom.fetch_sub(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_and(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
                 auto const t = atom.fetch_and(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_and(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
                 auto const t = atom.fetch_and(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_or(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
                 auto const t = atom.fetch_or(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_or(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
                 auto const t = atom.fetch_or(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_xor(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
                 auto const t = atom.fetch_xor(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T fetch_xor(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
                 auto const t = atom.fetch_xor(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
 
@@ -437,22 +437,22 @@ namespace std {
 
             T* fetch_add(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
                 auto const t = atom.fetch_add(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T* fetch_add(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
                 auto const t = atom.fetch_add(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T* fetch_sub(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
                 auto const t = atom.fetch_sub(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
             T* fetch_sub(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
                 auto const t = atom.fetch_sub(v,m); 
-                notify(n);
+                notify(m > memory_order_acquire ? n : notify_none);
                 return t;
             }
 
@@ -540,13 +540,13 @@ namespace std {
 
         bool is_lock_free() const volatile noexcept { return atom.is_lock_free(); }
         bool is_lock_free() const noexcept { return atom.is_lock_free(); }
-        void store(T, memory_order = memory_order_seq_cst, notify_hint = notify_all) volatile noexcept {
+        void store(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
             atom.store(v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
         }
         void store(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept { 
             atom.store(v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
         }
         T load(memory_order m = memory_order_seq_cst) const volatile noexcept { return atom.load(m); }
         T load(memory_order m = memory_order_seq_cst) const noexcept { return atom.load(m); }
@@ -556,52 +556,52 @@ namespace std {
 
         T exchange(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
             auto const t = atom.exchange(v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
             return t;
         }
-        T exchange(T, memory_order = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
+        T exchange(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
             auto const t = atom.exchange(v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_weak(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) volatile noexcept {
             auto const t = atom.compare_exchange_weak(r,v,m1,m2); 
-            notify(n);
+            notify(m1 > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_weak(T& r, T, memory_order m1, memory_order m2, notify_hint n = notify_all) noexcept {
             auto const t = atom.compare_exchange_weak(r,v,m1, m2); 
-            notify(n);
+            notify(m1 > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) volatile noexcept {
             auto const t = atom.compare_exchange_strong(r,v,m1,m2); 
-            notify(n);
+            notify(m1 > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) noexcept {
             auto const t = atom.compare_exchange_strong(r,v,m1,m2); 
-            notify(n);
+            notify(m1 > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_weak(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
             auto const t = atom.compare_exchange_weak(r,v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_weak(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
             auto const t = atom.compare_exchange_weak(r,v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
             auto const t = atom.compare_exchange_strong(r,v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
             auto const t = atom.compare_exchange_strong(r,v,m); 
-            notify(n);
+            notify(m > memory_order_acquire ? n : notify_none);
             return t;
         }
 
