@@ -127,7 +127,7 @@ namespace std {
                 if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_A))
                     return;
                 __exponential_backoff b;
-                while( atom.load(memory_order_relaxed) == val ) {
+                while(atom.load(memory_order_relaxed) == val) {
                     __do_backoff(b);
                     if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_B))
                         return;
@@ -137,7 +137,7 @@ namespace std {
                 if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_A))
                     return;
                 __exponential_backoff b;
-                while( atom.load(memory_order_relaxed) == val ) {
+                while(atom.load(memory_order_relaxed) == val) {
                     __do_backoff(b);
                     if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_B))
                         return;
@@ -150,7 +150,7 @@ namespace std {
                     return;
                 __exponential_backoff b;
                 std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
-                while( remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val ) {
+                while(remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val) {
                     __do_backoff(b);
                     if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_B))
                         return;
@@ -163,7 +163,7 @@ namespace std {
                     return;
                 __exponential_backoff b;
                 std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
-                while( remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val ) {
+                while(remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val) {
                     __do_backoff(b);
                     if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_B))
                         return;
@@ -176,37 +176,35 @@ namespace std {
         template <class T>
         struct __synchronic_base<T, typename enable_if<__SYNCHRONIC_COMPATIBLE(T)>::type> {
 
-        protected:
+        public:
             atomic<T> atom;
 
-            void notify(notify_hint count = notify_all) noexcept {
-                if(__builtin_expect(count == notify_none,1))
+            void notify(notify_hint hint = notify_all) noexcept {
+                if(__builtin_expect(hint == notify_none,1))
                     return;
-                auto const x = flag.exchange(0,std::memory_order_release);
+                auto const x = count.fetch_add(0,std::memory_order_acq_rel);
                 if(__builtin_expect(x,0)) {
-                    std::atomic_thread_fence(std::memory_order_acquire);
-                    if(__builtin_expect(count == notify_all,1))
-                        __synchronic_wake_all(this);
+                    if(__builtin_expect(hint == notify_all,1))
+                        __synchronic_wake_all(&atom);
                     else
-                        __synchronic_wake_one(this);
+                        __synchronic_wake_one(&atom);
                 }
             }
-            void notify(notify_hint count = notify_all) volatile noexcept {
-                if(__builtin_expect(count == notify_none,1))
+            void notify(notify_hint hint = notify_all) volatile noexcept {
+                if(__builtin_expect(hint == notify_none,1))
                     return;
-                auto const x = flag.exchange(0,std::memory_order_release);
+                auto const x = count.fetch_add(0,std::memory_order_acq_rel);
                 if(__builtin_expect(x,0)) {
-                    std::atomic_thread_fence(std::memory_order_acquire);
-                    if(__builtin_expect(count == notify_all,1))
-                        __synchronic_wake_all(this);
+                    if(__builtin_expect(hint == notify_all,1))
+                        __synchronic_wake_all_volatile(&atom);
                     else
-                        __synchronic_wake_one(this);
+                        __synchronic_wake_one_volatile(&atom);
                 }
             }
 
         public :
-            __synchronic_base() noexcept : flag(0) { }
-            constexpr __synchronic_base(T v) noexcept : atom(v), flag(0) { }
+            __synchronic_base() noexcept : count(0) { }
+            constexpr __synchronic_base(T v) noexcept : atom(v), count(0) { }
             __synchronic_base(const __synchronic_base&) = delete;
             ~__synchronic_base() { }
             __synchronic_base& operator=(const __synchronic_base&) = delete;
@@ -215,48 +213,48 @@ namespace std {
             void expect_update(T val, expect_hint = expect_urgent) const noexcept {
                 if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
-                while(atom.load(memory_order_relaxed) == val) {
-                    flag.store(1,std::memory_order_relaxed);
-                    std::atomic_thread_fence(std::memory_order_release);
-                    __synchronic_wait(this,val);
+                while(__builtin_expect(atom.load(memory_order_relaxed) == val,1)) {
+                    count.fetch_add(1,std::memory_order_release);
+                    __synchronic_wait(&atom,val);
+                    count.fetch_add(-1,std::memory_order_acquire);
                 }
             }
             void expect_update(T val, expect_hint = expect_urgent) const volatile noexcept {
                 if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
-                while(atom.load(memory_order_relaxed) == val) {
-                    flag.store(1,std::memory_order_relaxed);
-                    std::atomic_thread_fence(std::memory_order_release);
-                    __synchronic_wait(this,val);
+                while(__builtin_expect(atom.load(memory_order_relaxed) == val,1)) {
+                    count.fetch_add(1,std::memory_order_release);
+                    __synchronic_wait_volatile(&atom,val);
+                    count.fetch_add(-1,std::memory_order_acquire);
                 }
             }
 
             template <class Clock, class Duration>
             void expect_update_until(T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const {
-                if(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A))
+                if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
                 std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
-                while(remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val) {
-                    flag.store(1,std::memory_order_relaxed);
-                    std::atomic_thread_fence(std::memory_order_release);
+                while(__builtin_expect(remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val,1)) {
+                    count.fetch_add(1,std::memory_order_release);
                     __synchronic_wait_timed(&atom,val,remains);
+                    count.fetch_add(-1,std::memory_order_acquire);
                     remains = then - std::chrono::high_resolution_clock::now();
                 }
             }
             template <class Clock, class Duration>
             void expect_update_until(T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const volatile {
-                if(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A))
+                if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
                 std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
-                while(remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val) {
-                    flag.store(1,std::memory_order_relaxed);
-                    std::atomic_thread_fence(std::memory_order_release);
-                    __synchronic_wait_timed(&atom,val,remains);
+                while(__builtin_expect(remains > std::chrono::milliseconds::zero() && atom.load(memory_order_relaxed) == val,1)) {
+                    count.fetch_add(1,std::memory_order_release);
+                    __synchronic_wait_timed_volatile(&atom,val,remains);
+                    count.fetch_add(-1,std::memory_order_acquire);
                     remains = then - std::chrono::high_resolution_clock::now();
                 }
             }
         private:
-            mutable std::atomic<int> flag;
+            mutable std::atomic<int> count;
         };
 #endif
 
@@ -274,53 +272,53 @@ namespace std {
         struct __synchronic<T,typename enable_if<std::is_integral<T>::value>::type> : public __synchronic_base<T> {
 
             T fetch_add(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = atom.fetch_add(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_add(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_add(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = atom.fetch_add(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_add(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_sub(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = atom.fetch_sub(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_sub(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_sub(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = atom.fetch_sub(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_sub(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_and(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = atom.fetch_and(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_and(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_and(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = atom.fetch_and(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_and(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_or(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = atom.fetch_or(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_or(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_or(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = atom.fetch_or(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_or(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_xor(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = atom.fetch_xor(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_xor(v,m); 
+                this->notify(n);
                 return t;
             }
             T fetch_xor(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = atom.fetch_xor(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_xor(v,m); 
+                this->notify(n);
                 return t;
             }
 
@@ -331,103 +329,103 @@ namespace std {
             __synchronic& operator=(const __synchronic&) volatile = delete;
 
             T operator=(T v) volatile noexcept {
-                auto const t = atom = v; 
-                notify();
+                auto const t = this->atom = v; 
+                this->notify();
                 return t;
             }
             T operator=(T v) noexcept {
-                auto const t = atom = v; 
-                notify();
+                auto const t = this->atom = v; 
+                this->notify();
                 return t;
             }
             T operator++(int) volatile noexcept {
-                auto const t = ++atom; 
-                notify();
+                auto const t = ++this->atom; 
+                this->notify();
                 return t;
             }
             T operator++(int) noexcept {
-                auto const t = ++atom; 
-                notify();
+                auto const t = ++this->atom; 
+                this->notify();
                 return t;
             }
             T operator--(int) volatile noexcept {
-                auto const t = --atom; 
-                notify();
+                auto const t = --this->atom; 
+                this->notify();
                 return t;
             }
             T operator--(int) noexcept {
-                auto const t = --atom; 
-                notify();
+                auto const t = --this->atom; 
+                this->notify();
                 return t;
             }
             T operator++() volatile noexcept {
-                auto const t = atom++; 
-                notify();
+                auto const t = this->atom++; 
+                this->notify();
                 return t;
             }
             T operator++() noexcept {
-                auto const t = atom++; 
-                notify();
+                auto const t = this->atom++; 
+                this->notify();
                 return t;
             }
             T operator--() volatile noexcept {
-                auto const t = atom--; 
-                notify();
+                auto const t = this->atom--; 
+                this->notify();
                 return t;
             }
             T operator--() noexcept {
-                auto const t = atom--; 
-                notify();
+                auto const t = this->atom--; 
+                this->notify();
                 return t;
             }
             T operator+=(T v) volatile noexcept {
-                auto const t = atom += v; 
-                notify();
+                auto const t = this->atom += v; 
+                this->notify();
                 return t;
             }
             T operator+=(T v) noexcept {
-                auto const t = atom += v; 
-                notify();
+                auto const t = this->atom += v; 
+                this->notify();
                 return t;
             }
             T operator-=(T v) volatile noexcept {
-                auto const t = atom -= v; 
-                notify();
+                auto const t = this->atom -= v; 
+                this->notify();
                 return t;
             }
             T operator-=(T v) noexcept {
-                auto const t = atom -= v; 
-                notify();
+                auto const t = this->atom -= v; 
+                this->notify();
                 return t;
             }
             T operator&=(T v) volatile noexcept {
-                auto const t = atom &= v; 
-                notify();
+                auto const t = this->atom &= v; 
+                this->notify();
                 return t;
             }
             T operator&=(T v) noexcept {
-                auto const t = atom &= v; 
-                notify();
+                auto const t = this->atom &= v; 
+                this->notify();
                 return t;
             }
             T operator|=(T v) volatile noexcept {
-                auto const t = atom |= v; 
-                notify();
+                auto const t = this->atom |= v; 
+                this->notify();
                 return t;
             }
             T operator|=(T v) noexcept {
-                auto const t = atom |= v; 
-                notify();
+                auto const t = this->atom |= v; 
+                this->notify();
                 return t;
             }
             T operator^=(T v) volatile noexcept {
-                auto const t = atom ^= v; 
-                notify();
+                auto const t = this->atom ^= v; 
+                this->notify();
                 return t;
             }
             T operator^=(T v) noexcept {
-                auto const t = atom ^= v; 
-                notify();
+                auto const t = this->atom ^= v; 
+                this->notify();
                 return t;
             }
         };
@@ -436,23 +434,23 @@ namespace std {
         struct __synchronic<T*> : public __synchronic_base<T*> {
 
             T* fetch_add(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = atom.fetch_add(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_add(v,m); 
+                this->notify(n);
                 return t;
             }
             T* fetch_add(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = atom.fetch_add(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_add(v,m); 
+                this->notify(n);
                 return t;
             }
             T* fetch_sub(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = atom.fetch_sub(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_sub(v,m); 
+                this->notify(n);
                 return t;
             }
             T* fetch_sub(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = atom.fetch_sub(v,m); 
-                notify(m > memory_order_acquire ? n : notify_none);
+                auto const t = this->atom.fetch_sub(v,m); 
+                this->notify(n);
                 return t;
             }
 
@@ -463,73 +461,73 @@ namespace std {
             __synchronic& operator=(const __synchronic&) volatile = delete;
 
             T* operator=(T* v) volatile noexcept {
-                auto const t = atom = v; 
-                notify();
+                auto const t = this->atom = v; 
+                this->notify();
                 return t;
             }
             T* operator=(T* v) noexcept {
-                auto const t = atom = v; 
-                notify();
+                auto const t = this->atom = v; 
+                this->notify();
                 return t;
             }
             T* operator++(int) volatile noexcept {
-                auto const t = ++atom; 
-                notify();
+                auto const t = ++this->atom; 
+                this->notify();
                 return t;
             }
             T* operator++(int) noexcept {
-                auto const t = ++atom; 
-                notify();
+                auto const t = ++this->atom; 
+                this->notify();
                 return t;
             }
             T* operator--(int) volatile noexcept {
-                auto const t = --atom; 
-                notify();
+                auto const t = --this->atom; 
+                this->notify();
                 return t;
             }
             T* operator--(int) noexcept {
-                auto const t = --atom; 
-                notify();
+                auto const t = --this->atom; 
+                this->notify();
                 return t;
             }
             T* operator++() volatile noexcept {
-                auto const t = atom++; 
-                notify();
+                auto const t = this->atom++; 
+                this->notify();
                 return t;
             }
             T* operator++() noexcept {
-                auto const t = atom++; 
-                notify();
+                auto const t = this->atom++; 
+                this->notify();
                 return t;
             }
             T* operator--() volatile noexcept {
-                auto const t = atom--; 
-                notify();
+                auto const t = this->atom--; 
+                this->notify();
                 return t;
             }
             T* operator--() noexcept {
-                auto const t = atom--; 
-                notify();
+                auto const t = this->atom--; 
+                this->notify();
                 return t;
             }
             T* operator+=(ptrdiff_t v) volatile noexcept {
-                auto const t = atom += v; 
-                notify();
+                auto const t = this->atom += v; 
+                this->notify();
                 return t;
             }
             T* operator+=(ptrdiff_t v) noexcept {
-                auto const t = atom += v; 
-                notify();
+                auto const t = this->atom += v; 
+                this->notify();
                 return t;
             }
             T* operator-=(ptrdiff_t v) volatile noexcept {
-                auto const t = atom -= v; 
-                notify();
+                auto const t = this->atom -= v; 
+                this->notify();
                 return t;
             }
             T* operator-=(ptrdiff_t v) noexcept {
-                auto const t = atom -= v; 
-                notify();
+                auto const t = this->atom -= v; 
+                this->notify();
                 return t;
             }
         };
@@ -538,70 +536,70 @@ namespace std {
     template <class T>
     struct synchronic : public __details::__synchronic<T> {
 
-        bool is_lock_free() const volatile noexcept { return atom.is_lock_free(); }
-        bool is_lock_free() const noexcept { return atom.is_lock_free(); }
+        bool is_lock_free() const volatile noexcept { return this->atom.is_lock_free(); }
+        bool is_lock_free() const noexcept { return this->atom.is_lock_free(); }
         void store(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            atom.store(v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            this->atom.store(v,m); 
+            this->notify(n);
         }
         void store(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept { 
-            atom.store(v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            this->atom.store(v,m); 
+            this->notify(n);
         }
-        T load(memory_order m = memory_order_seq_cst) const volatile noexcept { return atom.load(m); }
-        T load(memory_order m = memory_order_seq_cst) const noexcept { return atom.load(m); }
+        T load(memory_order m = memory_order_seq_cst) const volatile noexcept { return this->atom.load(m); }
+        T load(memory_order m = memory_order_seq_cst) const noexcept { return this->atom.load(m); }
 
-        operator T() const volatile noexcept { return (T)atom; }
-        operator T() const noexcept { return (T)atom; }
+        operator T() const volatile noexcept { return (T)this->atom; }
+        operator T() const noexcept { return (T)this->atom; }
 
         T exchange(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            auto const t = atom.exchange(v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.exchange(v,m); 
+            this->notify(n);
             return t;
         }
         T exchange(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-            auto const t = atom.exchange(v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.exchange(v,m); 
+            this->notify(n);
             return t;
         }
         bool compare_exchange_weak(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) volatile noexcept {
-            auto const t = atom.compare_exchange_weak(r,v,m1,m2); 
-            notify(m1 > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.compare_exchange_weak(r,v,m1,m2); 
+            this->notify(n);
             return t;
         }
-        bool compare_exchange_weak(T& r, T, memory_order m1, memory_order m2, notify_hint n = notify_all) noexcept {
-            auto const t = atom.compare_exchange_weak(r,v,m1, m2); 
-            notify(m1 > memory_order_acquire ? n : notify_none);
+        bool compare_exchange_weak(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) noexcept {
+            auto const t = this->atom.compare_exchange_weak(r,v,m1, m2); 
+            this->notify(n);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) volatile noexcept {
-            auto const t = atom.compare_exchange_strong(r,v,m1,m2); 
-            notify(m1 > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.compare_exchange_strong(r,v,m1,m2); 
+            this->notify(n);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) noexcept {
-            auto const t = atom.compare_exchange_strong(r,v,m1,m2); 
-            notify(m1 > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.compare_exchange_strong(r,v,m1,m2); 
+            this->notify(n);
             return t;
         }
         bool compare_exchange_weak(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            auto const t = atom.compare_exchange_weak(r,v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.compare_exchange_weak(r,v,m); 
+            this->notify(n);
             return t;
         }
         bool compare_exchange_weak(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-            auto const t = atom.compare_exchange_weak(r,v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.compare_exchange_weak(r,v,m); 
+            this->notify(n);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            auto const t = atom.compare_exchange_strong(r,v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.compare_exchange_strong(r,v,m); 
+            this->notify(n);
             return t;
         }
         bool compare_exchange_strong(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-            auto const t = atom.compare_exchange_strong(r,v,m); 
-            notify(m > memory_order_acquire ? n : notify_none);
+            auto const t = this->atom.compare_exchange_strong(r,v,m); 
+            this->notify(n);
             return t;
         }
 
