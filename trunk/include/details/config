@@ -59,10 +59,10 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     //the combination of WaitOnAddress and WakeByAddressAll is supported on Windows 8.1+
     #define __synchronic_wait(x,v) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),-1)
     #define __synchronic_wait_timed(x,v,t) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),std::chrono::duration_cast<std::chrono::milliseconds>(t).count())
-    #define __synchronic_wake_one(x,b) WakeByAddressSingle((PVOID)x)
-    #define __synchronic_wake_all(x,b) WakeByAddressAll((PVOID)x)
+    #define __synchronic_wake_one(x) WakeByAddressSingle((PVOID)x)
+    #define __synchronic_wake_all(x) WakeByAddressAll((PVOID)x)
     #define __synchronic_wait_volatile(x,v) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),-1)
-    #define __synchronic_wait_volatile_timed(x,v,t) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),std::chrono::duration_cast<std::chrono::milliseconds>(t).count())
+    #define __synchronic_wait_timed_volatile(x,v,t) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),std::chrono::duration_cast<std::chrono::milliseconds>(t).count())
     #define __synchronic_wake_one_volatile(x) WakeByAddressSingle((PVOID)x)
     #define __synchronic_wake_all_volatile(x) WakeByAddressAll((PVOID)x)
     #define __SYNCHRONIC_COMPATIBLE(x) (is_pod<x>::value && (sizeof(x) <= 8))

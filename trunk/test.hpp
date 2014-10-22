@@ -67,7 +67,7 @@ struct ttas_mutex {
     void lock() {
         for(int i = 0;; ++i) {
             bool state = false;
-            if(locked.compare_exchange_weak(state,true,std::memory_order_relaxed))
+            if(locked.compare_exchange_weak(state,true,std::memory_order_relaxed,std::notify_none))
                 break;
             locked.expect_update(true);
         }
