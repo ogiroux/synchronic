@@ -616,11 +616,11 @@ namespace std {
             return __details::__synchronic<T>::operator=(val);
         }
 
-        T load_when_updated(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const noexcept {
+        T load_when_not_equal(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const noexcept {
             __details::__synchronic<T>::expect_update(val,h);
             return load(order);
         }
-        T load_when_updated(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const volatile noexcept {
+        T load_when_not_equal(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const volatile noexcept {
             __details::__synchronic<T>::expect_update(val,h);
             return load(order);
         }

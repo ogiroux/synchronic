@@ -56,6 +56,27 @@ private :
     std::atomic<bool> locked;
 };
 
+#ifdef WIN32
+#include <windows.h>
+#include <synchapi.h>
+struct srw_mutex {
+
+    srw_mutex () {
+        InitializeSRWLock(&_lock);
+    }
+
+    void lock() {
+        AcquireSRWLockExclusive(&_lock);
+    }
+    void unlock() {
+        ReleaseSRWLockExclusive(&_lock);
+    }
+
+private :
+    SRWLOCK _lock;
+};
+#endif
+
 struct ttas_mutex {
 
     ttas_mutex() : locked(false) {
@@ -111,14 +132,14 @@ struct mcs_mutex {
 	mcs_mutex(const mcs_mutex&) = delete;
 	mcs_mutex& operator=(const mcs_mutex&) = delete;
 
-    struct alignas(64) unique_lock {
+    struct unique_lock {
 
         unique_lock(mcs_mutex & m) : m(m), next(nullptr), ready(false) {
 
             unique_lock * const head = m.head.exchange(this,std::memory_order_acquire);
             if(__builtin_expect(head != nullptr,0)) {
                 head->next.store(this,std::memory_order_seq_cst,std::notify_one);
-                while(!ready.load_when_updated(false,std::memory_order_acquire))
+                while(!ready.load_when_not_equal(false,std::memory_order_acquire))
                     ;
             }
         }
@@ -131,7 +152,7 @@ struct mcs_mutex {
             if(__builtin_expect(!m.head.compare_exchange_strong(head,nullptr,std::memory_order_release, std::memory_order_relaxed),0)) {
                 unique_lock * n = next.load(std::memory_order_relaxed);
                 while(!n) 
-                    n = next.load_when_updated(n,std::memory_order_relaxed);
+                    n = next.load_when_not_equal(n,std::memory_order_relaxed);
                 n->ready.store(true,std::memory_order_release,std::notify_one);
             }
         }

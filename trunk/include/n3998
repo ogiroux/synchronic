@@ -60,7 +60,7 @@ namespace std {
                 wait( );
         }
         void wait( ) { 
-            while(!released.load_when_updated(false,memory_order_acquire))
+            while(!released.load_when_not_equal(false,memory_order_acquire))
                 ; 
         }
         bool try_wait( ) {
@@ -94,7 +94,7 @@ namespace std {
         void arrive_and_wait() {
             int const myepoch = epoch.load(memory_order_relaxed);
             if(!__arrive(myepoch))
-                while(epoch.load_when_updated(myepoch,memory_order_acquire) == myepoch)
+                while(epoch.load_when_not_equal(myepoch,memory_order_acquire) == myepoch)
                     ;
         }
         void arrive_and_drop() {
@@ -133,7 +133,7 @@ namespace std {
         void arrive_and_wait() {
             int const myepoch = epoch.load(memory_order_relaxed);
             if(!__arrive(myepoch))
-                while(epoch.load_when_updated(myepoch,memory_order_acquire) == myepoch)
+                while(epoch.load_when_not_equal(myepoch,memory_order_acquire) == myepoch)
                     ;
         }
         void arrive_and_drop() {
