@@ -26,8 +26,8 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#undef _WIN32_WINNT
-#define _WIN32_WINNT 0x0602
+//#undef _WIN32_WINNT
+//#define _WIN32_WINNT 0x0602
 
 unsigned next_table[] = 
     {
@@ -85,9 +85,11 @@ unsigned next_table[] =
 //this test uses a custom Mersenne twister to eliminate implementation variation
 MersenneTwister mt;
 
-int              dummy1 = 1;
-std::atomic<int> dummy2(1), 
-                 dummy3(1);
+int dummya = 1, dummyb =1;
+
+int dummy1 = 1;
+std::atomic<int> dummy2(1);
+std::atomic<int> dummy3(1);
 
 double time_item(int const count = (int)1E8)  {
 
@@ -101,7 +103,7 @@ double time_item(int const count = (int)1E8)  {
 
     return elapsed_seconds / count;
 }
-double time_nil(int const count = (int)1E9)  {
+double time_nil(int const count = (int)1E08)  {
 
     clock_t const start = clock();
 
@@ -119,7 +121,7 @@ double time_nil(int const count = (int)1E9)  {
     clock_t const end = clock();
     double elapsed_seconds = (end - start) / double(CLOCKS_PER_SEC);
 
-    return elapsed_seconds / 1E6;
+    return elapsed_seconds / count;
 }
 
 
@@ -162,7 +164,7 @@ void testmutex_outer(std::map<std::string,std::vector<double>>& results, std::st
     double const workItemTime = time_item() ,
                  nilTime = time_nil();
 
-    int const num_items_critical = (critical_duration <= 0 ? 0 : (std::max)( int(critical_duration / workItemTime + 0.5), int(20 * nilTime / workItemTime + 0.5))),
+    int const num_items_critical = (critical_duration <= 0 ? 0 : (std::max)( int(critical_duration / workItemTime + 0.5), int(100 * nilTime / workItemTime + 0.5))),
               num_items_noncritical = (num_items_critical <= 0 ? 0 : int( ( 1 - critical_fraction ) * num_items_critical / critical_fraction + 0.5 ));
 
     FOR_GAUNTLET(num_threads) {
@@ -368,7 +370,7 @@ int main(int argc, char * argv[]) {
     std::cerr << "work item speed is " << time_item() << " per item, nil is " << time_nil() << "\n";
     try {
 
-        std::pair<double,double> testpoints[] = { /*{1E-1, 10E-6}, {5E-1, 2E-6},*/  {1, 0}, {3E-1, 50E-9}, };
+        std::pair<double,double> testpoints[] = { /*{1E-1, 10E-6}, {5E-1, 2E-6},  {1, 0},*/ {3E-1, 50E-9}, };
         for(auto x : testpoints ) {
 
             std::map<std::string,std::vector<double>> results;
@@ -376,13 +378,19 @@ int main(int argc, char * argv[]) {
             //testbarrier_outer<std::barrier>(results, PREFIX"bar 1khz 100us", 1E3, x.second);
 
             std::string const names[] = { 
-                PREFIX"ttas", PREFIX"tkt", PREFIX"mcs", PREFIX"std" 
+                PREFIX"tkt", PREFIX"mcs", PREFIX"ttas", PREFIX"std"
+#ifdef WIN32
+                ,PREFIX"srw"
+#endif
             };
 
             //run -->
 
             mutex_tester<
-                ttas_mutex, ticket_mutex, mcs_mutex, std::mutex
+                ticket_mutex, mcs_mutex, ttas_mutex, std::mutex
+#ifdef WIN32
+                ,srw_mutex
+#endif
             >::run(results, names, x.first, x.second);
 
             //<-- run
