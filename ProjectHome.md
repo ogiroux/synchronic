@@ -1,0 +1,3 @@
+Atomic objects make it easy to write custom synchronization primitives with efficiency problems. One particularly thorny issue is the poor performance of the overall system when it is oversubscribed and/or contention is high.  Another is the high power consumed under contention, even when there is no oversubscription.
+
+With synchronic objects, even naive mutex code can achieve the same efficiency as std::mutex, which is in fact implemented exactly this way on many platforms (if you peek through the layers of abstraction).
