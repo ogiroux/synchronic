@@ -107,23 +107,23 @@ namespace std {
         template <class T, class Enable = void>
         struct __synchronic_base {
 
-        protected:
-            atomic<T> atom;
-
-            void notify(notify_hint = notify_all) noexcept {
-            }
-            void notify(notify_hint = notify_all) volatile noexcept {
-            }
-
-        public :
             __synchronic_base() noexcept = default;
-            constexpr __synchronic_base(T v) noexcept : atom(v) { }
+            ~__synchronic_base() = default;
             __synchronic_base(const __synchronic_base&) = delete;
-            ~__synchronic_base() { }
             __synchronic_base& operator=(const __synchronic_base&) = delete;
             __synchronic_base& operator=(const __synchronic_base&) volatile = delete;
 
-            void expect_update(T val, expect_hint = expect_urgent) const noexcept {
+            template <class F>
+            void notify(atomic<T>&, F && f, notify_hint = notify_all) noexcept {
+                f();
+            }
+
+            template <class F>
+            void notify(atomic<T>&, F && f, notify_hint = notify_all) volatile noexcept {
+                f();
+            }
+
+            void expect_update(atomic<T> const& atom, T val, expect_hint = expect_urgent) const noexcept {
                 if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_A))
                     return;
                 __exponential_backoff b;
@@ -133,7 +133,7 @@ namespace std {
                         return;
                 }
             }
-            void expect_update(T val, expect_hint = expect_urgent) const volatile noexcept {
+            void expect_update(atomic<T> const& atom, T val, expect_hint = expect_urgent) const volatile noexcept {
                 if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_A))
                     return;
                 __exponential_backoff b;
@@ -145,7 +145,7 @@ namespace std {
             }
 
             template <class Clock, class Duration>
-            void expect_update_until(T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const {
+            void expect_update_until(atomic<T> const& atom, T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const {
                 if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_A))
                     return;
                 __exponential_backoff b;
@@ -158,7 +158,7 @@ namespace std {
                 }
             }
             template <class Clock, class Duration>
-            void expect_update_until(T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const volatile {
+            void expect_update_until(atomic<T> const& atom, T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const volatile {
                 if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_A))
                     return;
                 __exponential_backoff b;
@@ -176,12 +176,20 @@ namespace std {
         template <class T>
         struct __synchronic_base<T, typename enable_if<__SYNCHRONIC_COMPATIBLE(T)>::type> {
 
-        public:
-            atomic<T> atom;
+            __synchronic_base() noexcept = default;
+            ~__synchronic_base() = default;
+            __synchronic_base(const __synchronic_base&) = delete;
+            __synchronic_base& operator=(const __synchronic_base&) = delete;
+            __synchronic_base& operator=(const __synchronic_base&) volatile = delete;
 
-            void notify(notify_hint hint = notify_all) noexcept {
+            template <class F>
+            void notify(atomic<T>& atom, F && f, notify_hint hint = notify_all) noexcept {
                 if(__builtin_expect(hint == notify_none,1))
                     return;
+
+                notifying.exchange(true, std::memory_order_acquire);
+                f();
+
                 auto const x = count.fetch_add(0,std::memory_order_acq_rel);
                 if(__builtin_expect(x,0)) {
                     if(__builtin_expect(hint == notify_all,1))
@@ -189,10 +197,17 @@ namespace std {
                     else
                         __synchronic_wake_one(&atom);
                 }
+                notifying.store(false, std::memory_order_release);
             }
-            void notify(notify_hint hint = notify_all) volatile noexcept {
+
+            template <class F>
+            void notify(atomic<T>& atom, F && f, notify_hint hint = notify_all) volatile noexcept {
                 if(__builtin_expect(hint == notify_none,1))
                     return;
+
+                notifying.exchange(true, std::memory_order_acquire);
+                f();
+
                 auto const x = count.fetch_add(0,std::memory_order_acq_rel);
                 if(__builtin_expect(x,0)) {
                     if(__builtin_expect(hint == notify_all,1))
@@ -200,17 +215,10 @@ namespace std {
                     else
                         __synchronic_wake_one_volatile(&atom);
                 }
+                notifying.store(false, std::memory_order_release);
             }
 
-        public :
-            __synchronic_base() noexcept : count(0) { }
-            constexpr __synchronic_base(T v) noexcept : atom(v), count(0) { }
-            __synchronic_base(const __synchronic_base&) = delete;
-            ~__synchronic_base() { }
-            __synchronic_base& operator=(const __synchronic_base&) = delete;
-            __synchronic_base& operator=(const __synchronic_base&) volatile = delete;
-
-            void expect_update(T val, expect_hint = expect_urgent) const noexcept {
+            void expect_update(atomic<T> const& atom, T val, expect_hint = expect_urgent) const noexcept {
                 if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
                 while(__builtin_expect(atom.load(memory_order_relaxed) == val,1)) {
@@ -218,8 +226,9 @@ namespace std {
                     __synchronic_wait(&atom,val);
                     count.fetch_add(-1,std::memory_order_acquire);
                 }
+                expect_exit();
             }
-            void expect_update(T val, expect_hint = expect_urgent) const volatile noexcept {
+            void expect_update(atomic<T> const& atom, T val, expect_hint = expect_urgent) const volatile noexcept {
                 if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
                 while(__builtin_expect(atom.load(memory_order_relaxed) == val,1)) {
@@ -227,10 +236,11 @@ namespace std {
                     __synchronic_wait_volatile(&atom,val);
                     count.fetch_add(-1,std::memory_order_acquire);
                 }
+                expect_exit();
             }
 
             template <class Clock, class Duration>
-            void expect_update_until(T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const {
+            void expect_update_until(atomic<T> const& atom, T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const {
                 if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
                 std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
@@ -240,9 +250,10 @@ namespace std {
                     count.fetch_add(-1,std::memory_order_acquire);
                     remains = then - std::chrono::high_resolution_clock::now();
                 }
+                expect_exit();
             }
             template <class Clock, class Duration>
-            void expect_update_until(T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const volatile {
+            void expect_update_until(atomic<T> const& atom, T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const volatile {
                 if(__builtin_expect(__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),1))
                     return;
                 std::chrono::milliseconds remains = then - std::chrono::high_resolution_clock::now();
@@ -252,440 +263,71 @@ namespace std {
                     count.fetch_add(-1,std::memory_order_acquire);
                     remains = then - std::chrono::high_resolution_clock::now();
                 }
+                expect_exit();
             }
-        private:
+        protected:
             mutable std::atomic<int> count;
+            std::atomic<bool> notifying;
+
+            void expect_exit() const {
+                while(__builtin_expect(notifying.load(std::memory_order_acquire),false))
+                    __synchronic_spin_wait_for_update(notifying, false,__SYNCHRONIC_SPIN_COUNT_A);
+            }
         };
 #endif
-
-        template <class T, class Enable = void>
-        struct __synchronic : public __synchronic_base<T> {
-
-            __synchronic() noexcept = default;
-            constexpr __synchronic(T v) noexcept : __synchronic_base<T>(v) { }
-            __synchronic(const __synchronic&) = delete;
-            __synchronic& operator=(const __synchronic&) = delete;
-            __synchronic& operator=(const __synchronic&) volatile = delete;
-        };
-
-        template <class T>
-        struct __synchronic<T,typename enable_if<std::is_integral<T>::value>::type> : public __synchronic_base<T> {
-
-            T fetch_add(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = this->atom.fetch_add(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_add(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = this->atom.fetch_add(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_sub(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = this->atom.fetch_sub(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_sub(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = this->atom.fetch_sub(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_and(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = this->atom.fetch_and(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_and(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = this->atom.fetch_and(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_or(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = this->atom.fetch_or(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_or(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = this->atom.fetch_or(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_xor(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = this->atom.fetch_xor(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T fetch_xor(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = this->atom.fetch_xor(v,m); 
-                this->notify(n);
-                return t;
-            }
-
-            __synchronic() noexcept = default;
-            constexpr __synchronic(T v) noexcept : __synchronic_base<T>(v) { }
-            __synchronic(const __synchronic&) = delete;
-            __synchronic& operator=(const __synchronic&) = delete;
-            __synchronic& operator=(const __synchronic&) volatile = delete;
-
-            T operator=(T v) volatile noexcept {
-                auto const t = this->atom = v; 
-                this->notify();
-                return t;
-            }
-            T operator=(T v) noexcept {
-                auto const t = this->atom = v; 
-                this->notify();
-                return t;
-            }
-            T operator++(int) volatile noexcept {
-                auto const t = ++this->atom; 
-                this->notify();
-                return t;
-            }
-            T operator++(int) noexcept {
-                auto const t = ++this->atom; 
-                this->notify();
-                return t;
-            }
-            T operator--(int) volatile noexcept {
-                auto const t = --this->atom; 
-                this->notify();
-                return t;
-            }
-            T operator--(int) noexcept {
-                auto const t = --this->atom; 
-                this->notify();
-                return t;
-            }
-            T operator++() volatile noexcept {
-                auto const t = this->atom++; 
-                this->notify();
-                return t;
-            }
-            T operator++() noexcept {
-                auto const t = this->atom++; 
-                this->notify();
-                return t;
-            }
-            T operator--() volatile noexcept {
-                auto const t = this->atom--; 
-                this->notify();
-                return t;
-            }
-            T operator--() noexcept {
-                auto const t = this->atom--; 
-                this->notify();
-                return t;
-            }
-            T operator+=(T v) volatile noexcept {
-                auto const t = this->atom += v; 
-                this->notify();
-                return t;
-            }
-            T operator+=(T v) noexcept {
-                auto const t = this->atom += v; 
-                this->notify();
-                return t;
-            }
-            T operator-=(T v) volatile noexcept {
-                auto const t = this->atom -= v; 
-                this->notify();
-                return t;
-            }
-            T operator-=(T v) noexcept {
-                auto const t = this->atom -= v; 
-                this->notify();
-                return t;
-            }
-            T operator&=(T v) volatile noexcept {
-                auto const t = this->atom &= v; 
-                this->notify();
-                return t;
-            }
-            T operator&=(T v) noexcept {
-                auto const t = this->atom &= v; 
-                this->notify();
-                return t;
-            }
-            T operator|=(T v) volatile noexcept {
-                auto const t = this->atom |= v; 
-                this->notify();
-                return t;
-            }
-            T operator|=(T v) noexcept {
-                auto const t = this->atom |= v; 
-                this->notify();
-                return t;
-            }
-            T operator^=(T v) volatile noexcept {
-                auto const t = this->atom ^= v; 
-                this->notify();
-                return t;
-            }
-            T operator^=(T v) noexcept {
-                auto const t = this->atom ^= v; 
-                this->notify();
-                return t;
-            }
-        };
-
-        template <class T>
-        struct __synchronic<T*> : public __synchronic_base<T*> {
-
-            T* fetch_add(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = this->atom.fetch_add(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T* fetch_add(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = this->atom.fetch_add(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T* fetch_sub(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-                auto const t = this->atom.fetch_sub(v,m); 
-                this->notify(n);
-                return t;
-            }
-            T* fetch_sub(ptrdiff_t v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-                auto const t = this->atom.fetch_sub(v,m); 
-                this->notify(n);
-                return t;
-            }
-
-            __synchronic() noexcept = default;
-            constexpr __synchronic(T* v) noexcept : __synchronic_base<T*>(v) { }
-            __synchronic(const __synchronic&) = delete;
-            __synchronic& operator=(const __synchronic&) = delete;
-            __synchronic& operator=(const __synchronic&) volatile = delete;
-
-            T* operator=(T* v) volatile noexcept {
-                auto const t = this->atom = v; 
-                this->notify();
-                return t;
-            }
-            T* operator=(T* v) noexcept {
-                auto const t = this->atom = v; 
-                this->notify();
-                return t;
-            }
-            T* operator++(int) volatile noexcept {
-                auto const t = ++this->atom; 
-                this->notify();
-                return t;
-            }
-            T* operator++(int) noexcept {
-                auto const t = ++this->atom; 
-                this->notify();
-                return t;
-            }
-            T* operator--(int) volatile noexcept {
-                auto const t = --this->atom; 
-                this->notify();
-                return t;
-            }
-            T* operator--(int) noexcept {
-                auto const t = --this->atom; 
-                this->notify();
-                return t;
-            }
-            T* operator++() volatile noexcept {
-                auto const t = this->atom++; 
-                this->notify();
-                return t;
-            }
-            T* operator++() noexcept {
-                auto const t = this->atom++; 
-                this->notify();
-                return t;
-            }
-            T* operator--() volatile noexcept {
-                auto const t = this->atom--; 
-                this->notify();
-                return t;
-            }
-            T* operator--() noexcept {
-                auto const t = this->atom--; 
-                this->notify();
-                return t;
-            }
-            T* operator+=(ptrdiff_t v) volatile noexcept {
-                auto const t = this->atom += v; 
-                this->notify();
-                return t;
-            }
-            T* operator+=(ptrdiff_t v) noexcept {
-                auto const t = this->atom += v; 
-                this->notify();
-                return t;
-            }
-            T* operator-=(ptrdiff_t v) volatile noexcept {
-                auto const t = this->atom -= v; 
-                this->notify();
-                return t;
-            }
-            T* operator-=(ptrdiff_t v) noexcept {
-                auto const t = this->atom -= v; 
-                this->notify();
-                return t;
-            }
-        };
     }
 
     template <class T>
-    struct synchronic : public __details::__synchronic<T> {
-
-        bool is_lock_free() const volatile noexcept { return this->atom.is_lock_free(); }
-        bool is_lock_free() const noexcept { return this->atom.is_lock_free(); }
-        void store(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            this->atom.store(v,m); 
-            this->notify(n);
-        }
-        void store(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept { 
-            this->atom.store(v,m); 
-            this->notify(n);
-        }
-        T load(memory_order m = memory_order_seq_cst) const volatile noexcept { return this->atom.load(m); }
-        T load(memory_order m = memory_order_seq_cst) const noexcept { return this->atom.load(m); }
-
-        operator T() const volatile noexcept { return (T)this->atom; }
-        operator T() const noexcept { return (T)this->atom; }
-
-        T exchange(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            auto const t = this->atom.exchange(v,m); 
-            this->notify(n);
-            return t;
-        }
-        T exchange(T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-            auto const t = this->atom.exchange(v,m); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_weak(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) volatile noexcept {
-            auto const t = this->atom.compare_exchange_weak(r,v,m1,m2); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_weak(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) noexcept {
-            auto const t = this->atom.compare_exchange_weak(r,v,m1, m2); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_strong(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) volatile noexcept {
-            auto const t = this->atom.compare_exchange_strong(r,v,m1,m2); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_strong(T& r, T v, memory_order m1, memory_order m2, notify_hint n = notify_all) noexcept {
-            auto const t = this->atom.compare_exchange_strong(r,v,m1,m2); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_weak(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            auto const t = this->atom.compare_exchange_weak(r,v,m); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_weak(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-            auto const t = this->atom.compare_exchange_weak(r,v,m); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_strong(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) volatile noexcept {
-            auto const t = this->atom.compare_exchange_strong(r,v,m); 
-            this->notify(n);
-            return t;
-        }
-        bool compare_exchange_strong(T& r, T v, memory_order m = memory_order_seq_cst, notify_hint n = notify_all) noexcept {
-            auto const t = this->atom.compare_exchange_strong(r,v,m); 
-            this->notify(n);
-            return t;
-        }
+    struct synchronic : public __details::__synchronic_base<T> {
 
         synchronic() noexcept = default;
-        constexpr synchronic(T val) noexcept : __details::__synchronic<T>(val) { }
+        ~synchronic() = default;
         synchronic(const synchronic&) = delete;
-        ~synchronic() { }
         synchronic& operator=(const synchronic&) = delete;
         synchronic& operator=(const synchronic&) volatile = delete;
-        T operator=(T val) noexcept {
-            return __details::__synchronic<T>::operator=(val);
-        }
-        T operator=(T val) volatile noexcept {
-            return __details::__synchronic<T>::operator=(val);
+
+        void expect_value(std::atomic<T> const& atom, T val, expect_hint hint = expect_urgent) {
+
+            T v = atom.load(std::memory_order_relaxed);
+            while(v != val) {
+                expect_update(atom, v, hint);
+                v = atom.load(std::memory_order_relaxed);
+            }
+            expect_exit();
         }
 
-        T load_when_not_equal(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const noexcept {
-            __details::__synchronic<T>::expect_update(val,h);
-            return load(order);
+        void expect_value(std::atomic<T> const& atom, T val, expect_hint hint = expect_urgent) volatile {
+
+            T v = atom.load(std::memory_order_relaxed);
+            while(v != val) {
+                expect_update(atom, v, hint);
+                v = atom.load(std::memory_order_relaxed);
+            }
+            expect_exit();
         }
-        T load_when_not_equal(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const volatile noexcept {
-            __details::__synchronic<T>::expect_update(val,h);
-            return load(order);
+
+        template <class F>
+        void expect(atomic<T> const& atom, F && f, expect_hint hint = expect_urgent) {
+
+            T v = atom.load(std::memory_order_relaxed);
+            while(!f()) {
+                expect_update(atom, v, hint);
+                v = atom.load(std::memory_order_relaxed);
+            }
+            expect_exit();
         }
-        T load_when_equal(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const noexcept {
-            for(T nval = load(memory_order_relaxed); nval != val; nval = load(memory_order_relaxed))
-                __details::__synchronic<T>::expect_update(nval,h);
-            return load(order);
-        }
-        T load_when_equal(T val, memory_order order = memory_order_seq_cst, expect_hint h = expect_urgent) const volatile noexcept {
-            for(T nval = load(memory_order_relaxed); nval != val; nval = load(memory_order_relaxed))
-                expect_update(nval,h);
-            return load(order);
-        }
-        template <class Rep, class Period>
-        void expect_update_for(T val, chrono::duration<Rep,Period> const& delta, expect_hint h = expect_urgent) const {
-            __details::__synchronic<T>::expect_update_until(val, std::chrono::high_resolution_clock::now() + delta,h);
-        }
-        template < class Rep, class Period>
-        void expect_update_for(T val, chrono::duration<Rep,Period> const& delta, expect_hint h = expect_urgent) const volatile {
-            __details::__synchronic<T>::expect_update_until(val, std::chrono::high_resolution_clock::now() + delta,h);
+
+        template <class F>
+        void expect(atomic<T> const& atom, F && f, expect_hint hint = expect_urgent) volatile {
+
+            T v = atom.load(std::memory_order_relaxed);
+            while(!f()) {
+                expect_update(atom, v, hint);
+                v = atom.load(std::memory_order_relaxed);
+            }
+            expect_exit();
         }
     };
-}
-
-#include <inttypes.h>
-
-namespace std {
-
-    typedef synchronic<char> synchronic_char;
-    typedef synchronic<char> synchronic_schar;
-    typedef synchronic<unsigned char> synchronic_uchar;
-    typedef synchronic<short> synchronic_short;
-    typedef synchronic<unsigned short> synchronic_ushort;
-    typedef synchronic<int> synchronic_int;
-    typedef synchronic<unsigned int> synchronic_uint;
-    typedef synchronic<long> synchronic_long;
-    typedef synchronic<unsigned long> synchronic_ulong;
-    typedef synchronic<long long> synchronic_llong;
-    typedef synchronic<unsigned long long> synchronic_ullong;
-    //typedef synchronic<char16_t> synchronic_char16_t;
-    //typedef synchronic<char32_t> synchronic_char32_t;
-    typedef synchronic<wchar_t> synchronic_wchar_t;
-
-    typedef synchronic<int_least8_t> synchronic_int_least8_t;
-    typedef synchronic<uint_least8_t> synchronic_uint_least8_t;
-    typedef synchronic<int_least16_t> synchronic_int_least16_t;
-    typedef synchronic<uint_least16_t> synchronic_uint_least16_t;
-    typedef synchronic<int_least32_t> synchronic_int_least32_t;
-    typedef synchronic<uint_least32_t> synchronic_uint_least32_t;
-    //typedef synchronic<int_least_64_t> synchronic_int_least_64_t;
-    typedef synchronic<uint_least64_t> synchronic_uint_least64_t;
-    typedef synchronic<int_fast8_t> synchronic_int_fast8_t;
-    typedef synchronic<uint_fast8_t> synchronic_uint_fast8_t;
-    typedef synchronic<int_fast16_t> synchronic_int_fast16_t;
-    typedef synchronic<uint_fast16_t> synchronic_uint_fast16_t;
-    typedef synchronic<int_fast32_t> synchronic_int_fast32_t;
-    typedef synchronic<uint_fast32_t> synchronic_uint_fast32_t;
-    typedef synchronic<int_fast64_t> synchronic_int_fast64_t;
-    typedef synchronic<uint_fast64_t> synchronic_uint_fast64_t;
-    typedef synchronic<intptr_t> synchronic_intptr_t;
-    typedef synchronic<uintptr_t> synchronic_uintptr_t;
-    typedef synchronic<size_t> synchronic_size_t;
-    typedef synchronic<ptrdiff_t> synchronic_ptrdiff_t;
-    typedef synchronic<intmax_t> synchronic_intmax_t;
-    typedef synchronic<uintmax_t> synchronic_uintmax_t;
 }
 
 #endif //__SYNCHRONIC_H

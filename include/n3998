@@ -60,8 +60,7 @@ namespace std {
                 wait( );
         }
         void wait( ) { 
-            while(!released.load_when_not_equal(false,memory_order_acquire))
-                ; 
+            sync.expect(released, [&]() -> bool { return released.load(std::memory_order_acquire); });
         }
         bool try_wait( ) {
             return released.load(memory_order_acquire);
@@ -70,11 +69,12 @@ namespace std {
         bool __arrive( ) { 
             if(count.fetch_add(-1,std::memory_order_release)!=1)
                 return false;
-            released.store(true,std::memory_order_release);
+            sync.notify(released, [&]() { released.store(true,std::memory_order_release); });
             return true;
         }
         atomic<int> count;
-        synchronic<bool> released;
+        atomic<bool> released;
+        synchronic<bool> sync;
     };
 
     /*
@@ -94,8 +94,8 @@ namespace std {
         void arrive_and_wait() {
             int const myepoch = epoch.load(memory_order_relaxed);
             if(!__arrive(myepoch))
-                while(epoch.load_when_not_equal(myepoch,memory_order_acquire) == myepoch)
-                    ;
+                sync.expect(epoch, [&]() -> bool { return epoch.load(std::memory_order_relaxed) != myepoch; });
+            std::atomic_thread_fence(memory_order_acquire);
         }
         void arrive_and_drop() {
             nexpected.fetch_add(-1,memory_order_relaxed);
@@ -107,14 +107,14 @@ namespace std {
             if(__builtin_expect(myresult == expected,0)) {
                 expected = nexpected.load(memory_order_relaxed);
                 arrived.store(0,memory_order_relaxed);
-                epoch.store(myepoch+1,memory_order_release);
+                sync.notify(epoch, [&]() { epoch.store(myepoch+1,memory_order_release); });
                 return true;
             }
             return false;
         }
         int expected;
-        atomic<int> arrived, nexpected;
-        synchronic<int> epoch;
+        atomic<int> arrived, nexpected, epoch;
+        synchronic<int> sync;
     };
 
     /*
@@ -133,8 +133,8 @@ namespace std {
         void arrive_and_wait() {
             int const myepoch = epoch.load(memory_order_relaxed);
             if(!__arrive(myepoch))
-                while(epoch.load_when_not_equal(myepoch,memory_order_acquire) == myepoch)
-                    ;
+                sync.expect(epoch, [&]() -> bool { return epoch.load(std::memory_order_relaxed) != myepoch; });
+            std::atomic_thread_fence(memory_order_acquire);
         }
         void arrive_and_drop() {
             nexpected.fetch_add(-1,memory_order_relaxed);
@@ -147,14 +147,14 @@ namespace std {
                 int const newexpected = completion();
                 expected = newexpected ? newexpected : nexpected.load(memory_order_relaxed);
                 arrived.store(0,memory_order_relaxed);
-                epoch.store(myepoch+1,memory_order_release);
+                sync.notify(epoch, [&]() { epoch.store(myepoch+1,memory_order_release); });
                 return true;
             }
             return false;
         }
         int expected;
-        atomic<int> arrived, nexpected;
-        synchronic<int> epoch;
+        atomic<int> arrived, nexpected, epoch;
+        synchronic<int> sync;
         function<int()> completion;
     };
 }

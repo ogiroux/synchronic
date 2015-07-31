@@ -86,20 +86,25 @@ struct ttas_mutex {
 	ttas_mutex& operator=(const ttas_mutex&) = delete;
 
     void lock() {
-        for(int i = 0;; ++i) {
+
+        sync.expect(locked, [&]() -> bool {
+
             bool state = false;
-            if(locked.compare_exchange_weak(state,true,std::memory_order_relaxed,std::notify_none))
-                break;
-            locked.expect_update(true);
-        }
-        std::atomic_thread_fence(std::memory_order_acquire);
+            return locked.compare_exchange_weak(state,true,std::memory_order_acquire);
+        });
     }
+
     void unlock() {
-        locked.store(false,std::memory_order_release);
+
+        sync.notify(locked, [&]() {
+
+            locked.store(false,std::memory_order_release);
+        });
     }
 
 private :
-    std::synchronic<bool> locked;
+    std::atomic<bool> locked;
+    std::synchronic<bool> sync;
 };
 
 struct ticket_mutex {
@@ -111,17 +116,24 @@ struct ticket_mutex {
 	ticket_mutex& operator=(const ticket_mutex&) = delete;
 
     void lock() {
+
         int const me = queue.fetch_add(1, std::memory_order_relaxed);
-        while(me != active.load_when_equal(me, std::memory_order_acquire))
-            ;
+        sync.expect(active, [&]() -> bool {
+
+            return active.load(std::memory_order_acquire) == me;
+        });
     }
 
     void unlock() {
-        active.fetch_add(1,std::memory_order_release);
+        
+        sync.notify(active, [&]() {
+
+            active.fetch_add(1, std::memory_order_release);
+        });
     }
 private :
-    std::synchronic<int> active;
-    std::atomic<int> queue;
+    std::atomic<int> active, queue;
+    std::synchronic<int> sync;
 };
 
 struct mcs_mutex {
@@ -138,9 +150,16 @@ struct mcs_mutex {
 
             unique_lock * const head = m.head.exchange(this,std::memory_order_acquire);
             if(__builtin_expect(head != nullptr,0)) {
-                head->next.store(this,std::memory_order_seq_cst,std::notify_one);
-                while(!ready.load_when_not_equal(false,std::memory_order_acquire))
-                    ;
+                
+                head->sync_next.notify(head->next, [&]() {
+
+                    head->next.store(this, std::memory_order_seq_cst);
+                }, std::notify_one);
+
+                sync_ready.expect(ready, [&]() -> bool {
+
+                    return ready.load(std::memory_order_acquire);
+                });
             }
         }
         
@@ -148,19 +167,32 @@ struct mcs_mutex {
 	    unique_lock& operator=(const unique_lock&) = delete;
 
         ~unique_lock() {
+
             unique_lock * head = this;
             if(__builtin_expect(!m.head.compare_exchange_strong(head,nullptr,std::memory_order_release, std::memory_order_relaxed),0)) {
-                unique_lock * n = next.load(std::memory_order_relaxed);
-                while(!n) 
-                    n = next.load_when_not_equal(n,std::memory_order_relaxed);
-                n->ready.store(true,std::memory_order_release,std::notify_one);
+
+                unique_lock * n = next.load(std::memory_order_acquire);
+                if(n == nullptr) {
+
+                    sync_next.expect(next, [&]() -> bool { 
+
+                        n = next.load(std::memory_order_acquire);
+                        return n != nullptr;
+                    });
+                }
+                n->sync_ready.notify(n->ready, [&]() {
+
+                    n->ready.store(true,std::memory_order_release);
+                });
             }
         }
 
     private:
         mcs_mutex & m;
-        std::synchronic<unique_lock*> next;
-        std::synchronic<bool> ready;
+        std::atomic<unique_lock*> next;
+        std::atomic<bool> ready;
+        std::synchronic<unique_lock*> sync_next;
+        std::synchronic<bool> sync_ready;
     };
 
 private :
