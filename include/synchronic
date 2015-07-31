@@ -271,7 +271,7 @@ namespace std {
 
             void expect_exit() const {
                 while(__builtin_expect(notifying.load(std::memory_order_acquire),false))
-                    __synchronic_spin_wait_for_update(notifying, false,__SYNCHRONIC_SPIN_COUNT_A);
+                    __synchronic_spin_wait_for_update(notifying, true,__SYNCHRONIC_SPIN_COUNT_A);
             }
         };
 #endif

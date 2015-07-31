@@ -1,0 +1,11 @@
+*.exe
+Debug/synchronic.ilk
+*.log
+Debug/synchronic.pdb
+*.obj
+Debug/vc120.pdb
+*.suo
+synchronic.sdf
+*.opensdf
+Debug/vc120.idb
+*.tlog
