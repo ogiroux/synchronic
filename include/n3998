@@ -60,7 +60,7 @@ namespace std {
                 wait( );
         }
         void wait( ) { 
-            sync.expect(released, [&]() -> bool { return released.load(std::memory_order_acquire); });
+            sync.expect(released, true);
         }
         bool try_wait( ) {
             return released.load(memory_order_acquire);
@@ -69,7 +69,7 @@ namespace std {
         bool __arrive( ) { 
             if(count.fetch_add(-1,std::memory_order_release)!=1)
                 return false;
-            sync.notify(released, [&]() { released.store(true,std::memory_order_release); });
+            sync.notify(released, true);
             return true;
         }
         atomic<int> count;

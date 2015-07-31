@@ -9,3 +9,4 @@ synchronic.sdf
 *.opensdf
 Debug/vc120.idb
 *.tlog
+*.pdb

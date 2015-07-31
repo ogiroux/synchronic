@@ -26,8 +26,8 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#undef _WIN32_WINNT
-#define _WIN32_WINNT 0x0602
+//#undef _WIN32_WINNT
+//#define _WIN32_WINNT 0x0602
 
 unsigned next_table[] = 
     {
