@@ -45,16 +45,24 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     #endif
     //yes, I define multiple assignment operators
     #pragma warning(disable:4522)
-    //I don't understand how Windows is so bad at timing functions, but is OK
-    //with straight-up yield loops
+    //I don't understand how Windows is so bad at timing functions, but is OK with straight-up yield loops
     #define __do_backoff(b) __synchronic_yield()
 #else
 #define __do_backoff(b) b.sleep_for_step()
 #endif
 
+//baseline synchronic behavior to optimize on top of std::condition_variable
+#define __SYNCHRONIC_CONDITION
+
 //certain platforms have efficient support for spin-waiting built into the operating system
-#if defined(__linux__) || (defined(_WIN32_WINNT) && _WIN32_WINNT >= 0x0602)
+#if defined(__linux__) || defined(__experimental_support_for_MACH_kernel_mode) || (defined(_WIN32_WINNT) && _WIN32_WINNT >= 0x0602)
+
+//for platforms that gave better support, use the naitve support or temporal backoff instead
+#undef __SYNCHRONIC_CONDITION
+#define __SYNCHRONIC_BACKOFF
+
 #if defined(_WIN32_WINNT)
+
     #include <Windows.h>
     //the combination of WaitOnAddress and WakeByAddressAll is supported on Windows 8.1+
     #define __synchronic_wait(x,v) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),-1)
@@ -66,7 +74,9 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     #define __synchronic_wake_one_volatile(x) WakeByAddressSingle((PVOID)x)
     #define __synchronic_wake_all_volatile(x) WakeByAddressAll((PVOID)x)
     #define __SYNCHRONIC_COMPATIBLE(x) (is_pod<x>::value && (sizeof(x) <= 8))
+
 #elif defined(__linux__)
+
     #include <chrono>
     #include <time.h>
     #include <unistd.h>
@@ -107,17 +117,53 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     #undef __synchronic_relax
     #define __synchronic_relax() asm volatile("rep; nop" ::: "memory")
 
+#elif defined(__experimental_support_for_MACH_kernel_mode)
+
+    #include <unistd.h>
+    #include <kern/kern_types.h>
+    #include <kern/sched_prim.h>
+
+    template <class X, class V>
+    void __synchronic_wait(X x, V v) {
+        assert_wait((event_t)x, THREAD_INTERRUPTIBLE);
+        if(x.load(memory_order_acquire) != v) {
+            clear_wait();
+            return;
+        }
+        thread_block(THREAD_CONTINUE_NULL);
+    }
+    template <class X, class V, class T>
+    void __synchronic_wait_timed(X x, V v, T t) {
+        static long const tick_per_msec = sysconf(_SC_CLK_TCK)/1000;
+        assert_wait((event_t)x, THREAD_INTERRUPTIBLE);
+        if(x.load(memory_order_acquire) != v) {
+            clear_wait();
+            return;
+        }
+        thread_set_timeout(tick_per_msec/t);
+        thread_block(THREAD_CONTINUE_NULL);
+    }
+    #define __synchronic_wake_one(x) thread_wakeup_one((event_t)x)
+    #define __synchronic_wake_all(x) thread_wakeup((event_t)x)
+    #define __synchronic_wait_volatile(x,v) __synchronic_dowait(x,v)
+    #define __synchronic_wait_timed_volatile(x,v,t) __synchronic_dowait_timed(x,v,t)
+    #define __synchronic_wake_one_volatile(x) thread_wakeup_one((event_t)x)
+    #define __synchronic_wake_all_volatile(x) thread_wakeup((event_t)x)
+    #define __SYNCHRONIC_COMPATIBLE(x) true
+
 #endif
 #endif
 
 //this is the number of times we initially spin, on the first wait attempt
-#define __SYNCHRONIC_SPIN_COUNT_A 16
+#define __SYNCHRONIC_SPIN_COUNT_A 64
 
 //this is how decide to yield instead of just spinning, 'c' is the current trip count
 //#define __SYNCHRONIC_SPIN_YIELD(c) true
 #define __SYNCHRONIC_SPIN_RELAX(c) (c>>3)
 
 //this is the number of times we normally spin, on every subsequent wait attempt
-#define __SYNCHRONIC_SPIN_COUNT_B 8
+#define __SYNCHRONIC_SPIN_COUNT_B 16
+
+#define __SYNCHRONIC_SPIN_COUNT_C 512
 
 #endif //__SYNCHRONIC_CONFIG_H

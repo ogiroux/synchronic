@@ -10,3 +10,16 @@ synchronic.sdf
 Debug/vc120.idb
 *.tlog
 *.pdb
+*.xlsx
+
+*.csv
+
+test_backoff
+
+test_condition
+
+test_spin
+
+*.plist
+
+test

@@ -50,7 +50,9 @@ unsigned next_table[] =
     };
 
 //change this if you want to allow oversubscription of the system, by default only the range {1-(system size)} is tested
-#define FOR_GAUNTLET(x) for(unsigned x = (std::min)(std::thread::hardware_concurrency()*8,unsigned(sizeof(next_table)/sizeof(unsigned))); x; x = next_table[x-1])
+#define FOR_GAUNTLET(x) for(unsigned x = (std::min)(std::thread::hardware_concurrency()*2,unsigned(sizeof(next_table)/sizeof(unsigned))); x; x = next_table[x-1])
+
+//#define FOR_GAUNTLET(x) for(unsigned x = 8; x;)
 
 //set this to override the benchmark of barriers to use OMP barriers instead of n3998 std::barrier
 //#define USEOMP
@@ -78,8 +80,12 @@ unsigned next_table[] =
 
 #if defined(__SYNCHRONIC_COMPATIBLE)
     #define PREFIX "futex-"
-#else
+#elif defined(__SYNCHRONIC_BACKOFF)
     #define PREFIX "backoff-"
+#elif defined(__SYNCHRONIC_CONDITION)
+    #define PREFIX "condition-"
+#else
+    #define PREFIX "spin-"
 #endif
 
 //this test uses a custom Mersenne twister to eliminate implementation variation
@@ -378,7 +384,7 @@ int main(int argc, char * argv[]) {
             //testbarrier_outer<std::barrier>(results, PREFIX"bar 1khz 100us", 1E3, x.second);
 
             std::string const names[] = { 
-                PREFIX"tkt", PREFIX"mcs", PREFIX"ttas", PREFIX"std"
+                PREFIX"ttas", PREFIX"tkt", PREFIX"mcs", PREFIX"std"
 #ifdef WIN32
                 ,PREFIX"srw"
 #endif
@@ -387,7 +393,7 @@ int main(int argc, char * argv[]) {
             //run -->
 
             mutex_tester<
-                ticket_mutex, mcs_mutex, ttas_mutex, std::mutex
+                ttas_mutex, ticket_mutex, mcs_mutex, std::mutex
 #ifdef WIN32
                 ,srw_mutex
 #endif
