@@ -151,15 +151,8 @@ struct mcs_mutex {
             unique_lock * const head = m.head.exchange(this,std::memory_order_acquire);
             if(__builtin_expect(head != nullptr,0)) {
                 
-                head->sync_next.notify(head->next, [&]() {
-
-                    head->next.store(this, std::memory_order_seq_cst);
-                }, std::notify_one);
-
-                sync_ready.expect(ready, [&]() -> bool {
-
-                    return ready.load(std::memory_order_acquire);
-                });
+                head->sync_next.notify(head->next, this, std::notify_one);
+                sync_ready.expect(ready, true);
             }
         }
         
@@ -180,10 +173,7 @@ struct mcs_mutex {
                         return n != nullptr;
                     });
                 }
-                n->sync_ready.notify(n->ready, [&]() {
-
-                    n->ready.store(true,std::memory_order_release);
-                });
+                n->sync_ready.notify(n->ready, true);
             }
         }
 

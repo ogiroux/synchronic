@@ -175,23 +175,11 @@ void testmutex_outer(std::map<std::string,std::vector<double>>& results, std::st
 
     FOR_GAUNTLET(num_threads) {
 
-        std::cerr << "Sleeping for 2 seconds.\n";
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::cerr << "Sleeping for 1 second.\n";
+        std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        int const num_iterations = (num_items_critical + num_items_noncritical != 0) ? 
-#ifdef __SYNCHRONIC_JUST_YIELD
-                                        int( 1 / ( 8 * workItemTime ) / (num_items_critical + num_items_noncritical) / num_threads + 0.5 ) : 
-#else
-                                        int( 1 / ( 8 * workItemTime ) / (num_items_critical + num_items_noncritical) / num_threads + 0.5 ) : 
-#endif
-#ifdef WIN32
-                                        int( 1 / workItemTime / (20 * num_threads * num_threads) );
+        int const num_iterations = int(1.0/num_threads/(1E-7*exp(0.3*num_threads)) + 0.5);
         std::cerr << "running " << truename.str() << " #" << num_threads << ", " << num_iterations << " * " << num_items_noncritical << "\n" << std::flush;
-#else
-                                        int( 1 / workItemTime / (200 * num_threads * num_threads) );
-        std::cerr << "running " << truename.str() << " #" << num_threads << ", " << num_iterations << " * " << num_items_noncritical << "\n" << std::flush;
-#endif
-
 
         std::atomic<int> t[2], wc[2], wnc[2];
 
@@ -384,7 +372,7 @@ int main(int argc, char * argv[]) {
             //testbarrier_outer<std::barrier>(results, PREFIX"bar 1khz 100us", 1E3, x.second);
 
             std::string const names[] = { 
-                PREFIX"ttas", PREFIX"tkt", PREFIX"mcs", PREFIX"std"
+                PREFIX"mcs", PREFIX"ttas", PREFIX"tkt", PREFIX"std"
 #ifdef WIN32
                 ,PREFIX"srw"
 #endif
@@ -393,7 +381,7 @@ int main(int argc, char * argv[]) {
             //run -->
 
             mutex_tester<
-                ttas_mutex, ticket_mutex, mcs_mutex, std::mutex
+                mcs_mutex, ttas_mutex, ticket_mutex, std::mutex
 #ifdef WIN32
                 ,srw_mutex
 #endif

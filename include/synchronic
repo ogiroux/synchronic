@@ -135,7 +135,7 @@ namespace std {
                     if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_B))
                         return;
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
 
             template <class Clock, class Duration>
@@ -151,7 +151,7 @@ namespace std {
                         return;
                     remains = then - std::chrono::high_resolution_clock::now();
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
 
             template< class Rep, class Period >
@@ -159,18 +159,19 @@ namespace std {
                 
                 expect_update_until(atom, val, std::chrono::high_resolution_clock::now() + delay, hint);
             }
-            
-        protected :
-            void expect_exit() const {
-                std::atomic_thread_fence(std::memory_order_acquire);
-            }
         };
 #elif defined(__SYNCHRONIC_CONDITION)
         template <class T, class Enable = void>
         struct __synchronic_base {
 
             __synchronic_base() : notify_count(0), expect_count(0) { };
-            ~__synchronic_base() = default;
+            ~__synchronic_base() {
+                int x = notify_count.load(std::memory_order_relaxed);
+                while(__builtin_expect(x,0)) {
+                    __synchronic_spin_wait_for_update(notify_count, x, __SYNCHRONIC_SPIN_COUNT_A);
+                    x = notify_count.load(std::memory_order_relaxed);
+                }
+            }
             __synchronic_base(const __synchronic_base&) = delete;
             __synchronic_base& operator=(const __synchronic_base&) = delete;
             __synchronic_base& operator=(const __synchronic_base&) volatile = delete;
@@ -186,7 +187,7 @@ namespace std {
                     notify_count.fetch_add(-1, std::memory_order_relaxed);
                     throw;
                 }
-                int const x = expect_count.load(std::memory_order_acq_rel);
+                int const x = expect_count.load();
                 if(__builtin_expect(x,0)) {
                     {
                         std::unique_lock<std::mutex> l(m);
@@ -208,7 +209,7 @@ namespace std {
                         c.wait(l, [&]() -> bool { return atom.load(std::memory_order_relaxed) != val; } );
                     expect_count.fetch_add(-1, std::memory_order_release);
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
 
             template <class Clock, class Duration>
@@ -220,7 +221,7 @@ namespace std {
                         c.wait_until(l, then, [&]() -> bool { return atom.load(std::memory_order_relaxed) != val; });
                     }
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
 
             template< class Rep, class Period >
@@ -232,23 +233,13 @@ namespace std {
                         c.wait_for(l, delay, [&]() -> bool { return atom.load(std::memory_order_relaxed) != val; });
                     }
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
             
         protected:
             mutable std::mutex m;
             mutable std::condition_variable c;
             mutable std::atomic<int> expect_count, notify_count;
-
-            void expect_exit() const {
-//                int x = notify_count.load(std::memory_order_relaxed);
-//                while(__builtin_expect(x,0)) {
-//                    __synchronic_spin_wait_for_update(notify_count, x, __SYNCHRONIC_SPIN_COUNT_A);
-//                    x = notify_count.load(std::memory_order_relaxed);
-//                }
-                while(notify_count.load(std::memory_order_relaxed)) sched_yield();
-                std::atomic_thread_fence(std::memory_order_acquire);
-            }
         };
         
 #else
@@ -272,7 +263,7 @@ namespace std {
                 while(atom.load(memory_order_relaxed) == val)
                     if(__synchronic_spin_wait_for_update(atom, val, __SYNCHRONIC_SPIN_COUNT_C))
                         break;
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
             
             template <class Clock, class Duration>
@@ -284,19 +275,13 @@ namespace std {
                         break;
                     remains = then - std::chrono::high_resolution_clock::now();
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
             
             template< class Rep, class Period >
             void expect_update_for(atomic<T> const& atom, T val, std::chrono::duration<Rep, Period> const& delay, expect_hint hint = expect_urgent) const {
                 
                 expect_update_until(atom, val, std::chrono::high_resolution_clock::now() + delay, hint);
-            }
-            
-        protected :
-            void expect_exit() const {
-                
-                std::atomic_thread_fence(std::memory_order_acquire);
             }
         };
 #endif
@@ -305,42 +290,49 @@ namespace std {
         template <class T>
         struct __synchronic_base<T, typename enable_if<__SYNCHRONIC_COMPATIBLE(T)>::type> {
 
-            __synchronic_base() : notify_count(0), expect_count(0) { };
-            ~__synchronic_base() = default;
+            __synchronic_base() : expect_count(0), notify_count(0) { };
+            ~__synchronic_base() {
+                int x = notify_count.load(std::memory_order_relaxed);
+                while(__builtin_expect(x,0)) {
+                    __synchronic_spin_wait_for_update(notify_count, x, __SYNCHRONIC_SPIN_COUNT_A);
+                    x = notify_count.load(std::memory_order_relaxed);
+                }
+            }
             __synchronic_base(const __synchronic_base&) = delete;
             __synchronic_base& operator=(const __synchronic_base&) = delete;
             __synchronic_base& operator=(const __synchronic_base&) volatile = delete;
 
             template <class F>
-            void notify(atomic<T>& atom, F && f, notify_hint hint = notify_all) noexcept {
+            void notify(atomic<T>& atom, F && f, notify_hint hint = notify_all) {
 
-                notify_count.fetch_add(1, std::memory_order_acquire);
+                assert(notify_count.fetch_add(1, std::memory_order_acquire)>=0);
                 try {
                     f();
                 }
                 catch(...) {
-                    notify_count.fetch_add(-1, std::memory_order_release);
+                    assert(notify_count.fetch_add(-1, std::memory_order_relaxed));
                     throw;
                 }
-                int const x = expect_count.fetch_add(0,std::memory_order_acq_rel);
+                int const x = expect_count.load();
                 if(__builtin_expect(x,0)) {
                     if(__builtin_expect(hint == notify_all,1))
                         __synchronic_wake_all(&atom);
                     else
                         __synchronic_wake_one(&atom);
-                notify_count.fetch_add(-1, std::memory_order_release);
+                }
+                assert(notify_count.fetch_add(-1, std::memory_order_release));
             }
 
             void expect_update(atomic<T> const& atom, T val, expect_hint = expect_urgent) const noexcept {
                 
                 if(__builtin_expect(!__synchronic_spin_wait_for_update(atom, val,__SYNCHRONIC_SPIN_COUNT_A),0)) {
-                    expect_count.fetch_add(1,std::memory_order_acquire);
+                    expect_count.fetch_add(1, std::memory_order_acquire);
                     do {
                         __synchronic_wait(&atom,val);
                     } while(__builtin_expect(atom.load(memory_order_relaxed) == val,1));
-                    expect_count.fetch_add(-1,std::memory_order_release);
+                    assert(expect_count.fetch_add(-1, std::memory_order_release));
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
 
             template <class Clock, class Duration>
@@ -357,7 +349,7 @@ namespace std {
                     expect_count.fetch_add(-1,std::memory_order_release);
                     
                 }
-                expect_exit();
+                std::atomic_thread_fence(std::memory_order_acquire);
             }
                 
             template< class Rep, class Period >
@@ -368,15 +360,6 @@ namespace std {
 
         protected:
             mutable std::atomic<int> expect_count, notify_count;
-                
-            void expect_exit() const {
-                int x = notify_count.load(std::memory_order_relaxed);
-                while(__builtin_expect(x,0)) {
-                    __synchronic_spin_wait_for_update(notify_count, x, __SYNCHRONIC_SPIN_COUNT_A);
-                    x = notify_count.load(std::memory_order_relaxed);
-                }
-                std::atomic_thread_fence(std::memory_order_acquire);
-            }
         };
 #endif
     }
@@ -409,7 +392,7 @@ namespace std {
                 base::expect_update(atom, v, hint);
                 v = atom.load(std::memory_order_relaxed);
             }
-            base::expect_exit();
+            std::atomic_thread_fence(std::memory_order_acquire);
         }
 
         void expect(std::atomic<T> const& atom, T val, expect_hint hint = expect_urgent) const noexcept {
