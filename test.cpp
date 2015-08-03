@@ -26,6 +26,9 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
+//#define __SYNCHRONIC_PURE_CONDITION
+//#define __SYNCHRONIC_CONDITION
+
 //#undef _WIN32_WINNT
 //#define _WIN32_WINNT 0x0602
 
@@ -84,6 +87,8 @@ unsigned next_table[] =
     #define PREFIX "backoff-"
 #elif defined(__SYNCHRONIC_CONDITION)
     #define PREFIX "condition-"
+#elif defined(__SYNCHRONIC_PURE_CONDITION)
+    #define PREFIX "pure-condition-"
 #else
     #define PREFIX "spin-"
 #endif

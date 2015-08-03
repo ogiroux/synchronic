@@ -71,7 +71,7 @@ namespace std {
             return false;
         }
 
-#ifdef __SYNCHRONIC_BACKOFF
+#if defined(__SYNCHRONIC_BACKOFF)
         
         struct __exponential_backoff {
             __exponential_backoff(int maximum=512) : maximum(maximum), microseconds(8), x(123456789), y(362436069), z(521288629) {
@@ -160,7 +160,9 @@ namespace std {
                 expect_update_until(atom, val, std::chrono::high_resolution_clock::now() + delay, hint);
             }
         };
+
 #elif defined(__SYNCHRONIC_CONDITION)
+
         template <class T, class Enable = void>
         struct __synchronic_base {
 
@@ -241,8 +243,62 @@ namespace std {
             mutable std::condition_variable c;
             mutable std::atomic<int> expect_count, notify_count;
         };
-        
-#else
+
+#elif defined(__SYNCHRONIC_PURE_CONDITION)
+
+        template <class T, class Enable = void>
+        struct __synchronic_base {
+
+            __synchronic_base() = default;
+            ~__synchronic_base() { std::unique_lock<std::mutex> l(m); };
+            __synchronic_base(const __synchronic_base&) = delete;
+            __synchronic_base& operator=(const __synchronic_base&) = delete;
+            __synchronic_base& operator=(const __synchronic_base&) volatile = delete;
+
+            template <class F>
+            void notify(atomic<T>& atom, F && f, notify_hint hint = notify_all) {
+
+                //{
+                    std::unique_lock<std::mutex> l(m);
+                    f();
+                //}
+                if(__builtin_expect(hint == notify_all,1))
+                    c.notify_all();
+                else
+                    c.notify_one();
+            }
+
+            void expect_update(atomic<T> const& atom, T val, expect_hint = expect_urgent) const noexcept {
+                
+                std::unique_lock<std::mutex> l(m);
+                if(__builtin_expect(atom.load(memory_order_acquire) == val,0))
+                    c.wait(l, [&]() -> bool { return atom.load(std::memory_order_relaxed) != val; });
+                std::atomic_thread_fence(std::memory_order_acquire);
+            }
+
+            template <class Clock, class Duration>
+            void expect_update_until(atomic<T> const& atom, T val, chrono::time_point<Clock,Duration> const& then, expect_hint = expect_urgent) const {
+                std::unique_lock<std::mutex> l(m);
+                if(__builtin_expect(atom.load(memory_order_acquire) == val,0))
+                    c.wait_until(l, then, [&]() -> bool { return atom.load(std::memory_order_relaxed) != val; });
+                std::atomic_thread_fence(std::memory_order_acquire);
+            }
+
+            template< class Rep, class Period >
+            void expect_update_for(atomic<T> const& atom, T val, std::chrono::duration<Rep, Period> const& delay, expect_hint = expect_urgent) const {
+                std::unique_lock<std::mutex> l(m);
+                if(__builtin_expect(atom.load(memory_order_acquire) == val,0))
+                    c.wait_for(l, delay, [&]() -> bool { return atom.load(std::memory_order_relaxed) != val; });
+                std::atomic_thread_fence(std::memory_order_acquire);
+            }
+            
+        protected:
+            mutable std::mutex m;
+            mutable std::condition_variable c;
+        };
+                
+#elif defined(__SYNCHRONIC_SPIN)
+
         template <class T, class Enable = void>
         struct __synchronic_base {
             
@@ -284,6 +340,11 @@ namespace std {
                 expect_update_until(atom, val, std::chrono::high_resolution_clock::now() + delay, hint);
             }
         };
+
+#else
+
+    #error "There must be one baseline implemented selected."
+
 #endif
 
 #ifdef __SYNCHRONIC_COMPATIBLE

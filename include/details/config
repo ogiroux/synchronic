@@ -51,11 +51,13 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #define __do_backoff(b) b.sleep_for_step()
 #endif
 
-//baseline synchronic behavior to optimize on top of std::condition_variable
-#ifdef __APPLE__
-    #define __SYNCHRONIC_CONDITION
-#else
-    #define __SYNCHRONIC_BACKOFF
+//baseline synchronic behavior
+#if !defined(__SYNCHRONIC_PURE_CONDITION) && !defined(__SYNCHRONIC_CONDITION) && !defined(__SYNCHRONIC_BACKOFF) && !defined(__SYNCHRONIC_SPIN)
+    #ifdef __APPLE__
+        #define __SYNCHRONIC_CONDITION
+    #else
+        #define __SYNCHRONIC_BACKOFF
+    #endif
 #endif
 
 //certain platforms have efficient support for spin-waiting built into the operating system
