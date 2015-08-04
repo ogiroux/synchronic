@@ -47,6 +47,9 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     #pragma warning(disable:4522)
     //I don't understand how Windows is so bad at timing functions, but is OK with straight-up yield loops
     #define __do_backoff(b) __synchronic_yield()
+
+    #undef __synchronic_relax
+    #define __synchronic_relax _mm_pause
 #else
 #define __do_backoff(b) b.sleep_for_step()
 #endif
@@ -157,14 +160,14 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #endif
 
 //this is the number of times we initially spin, on the first wait attempt
-#define __SYNCHRONIC_SPIN_COUNT_A 64
+#define __SYNCHRONIC_SPIN_COUNT_A 16
 
 //this is how decide to yield instead of just spinning, 'c' is the current trip count
 //#define __SYNCHRONIC_SPIN_YIELD(c) true
 #define __SYNCHRONIC_SPIN_RELAX(c) (c>>3)
 
 //this is the number of times we normally spin, on every subsequent wait attempt
-#define __SYNCHRONIC_SPIN_COUNT_B 16
+#define __SYNCHRONIC_SPIN_COUNT_B 8
 
 #define __SYNCHRONIC_SPIN_COUNT_C 512
 

@@ -35,20 +35,26 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 template <bool truly>
 struct dumb_mutex {
 
-    dumb_mutex () : locked(0) {
+    dumb_mutex() : locked(false) {
     }
 
+	dumb_mutex(const dumb_mutex&) = delete;
+	dumb_mutex& operator=(const dumb_mutex&) = delete;
+
     void lock() {
+
         while(1) {
             bool state = false;
             if(locked.compare_exchange_weak(state,true,std::memory_order_acquire))
-                break;
+                return;
             while(locked.load(std::memory_order_relaxed))
                 if(!truly)
-                    std::this_thread::yield();
-        }
+                    __synchronic_yield();
+        };
     }
+
     void unlock() {
+
         locked.store(false,std::memory_order_release);
     }
 
@@ -210,8 +216,9 @@ namespace std {
 
 class MersenneTwister
 {
-    volatile unsigned long m_buffer[MT_LEN][64/sizeof(unsigned long)];
     volatile int m_index;
+    volatile unsigned long m_buffer[MT_LEN][64/sizeof(unsigned long)];
+    char pad[4096];
 
 public:
     MersenneTwister() {

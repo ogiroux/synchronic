@@ -114,31 +114,13 @@ double time_item(int const count = (int)1E8)  {
 
     return elapsed_seconds / count;
 }
-double time_nil(int const count = (int)1E08)  {
-
-    clock_t const start = clock();
-
-    dummy3 = count;
-    for(int i = 0;i < (int)1E6; ++i) {
-        if(dummy1) {
-            // Do some work while holding the lock
-            int workunits = dummy3;//(int) (mtc.poissonInterval((float)num_items_critical) + 0.5f);
-            for (int i = 1; i < workunits; i++)
-                dummy1 &= i;       // Do one work unit
-            dummy2.fetch_add(dummy1,std::memory_order_relaxed);
-        }
-    }
-
-    clock_t const end = clock();
-    double elapsed_seconds = (end - start) / double(CLOCKS_PER_SEC);
-
-    return elapsed_seconds / count;
-}
-
 
 template <class mutex_type>
-void testmutex_inner(mutex_type& m, std::atomic<int>& t,std::atomic<int>& wc,std::atomic<int>& wnc, int const num_iterations, 
+void testmutex_inner(std::atomic<bool>& go, mutex_type& m, std::atomic<int>& t,std::atomic<int>& wc,std::atomic<int>& wnc, int const num_iterations, 
                      int const num_items_critical, int const num_items_noncritical, MersenneTwister& mtc, MersenneTwister& mtnc, bool skip) {
+
+    while(!go)
+        __synchronic_relax();
 
     for(int k = 0; k < num_iterations; ++k) {
 
@@ -167,23 +149,19 @@ void testmutex_inner(mutex_type& m, std::atomic<int>& t,std::atomic<int>& wc,std
 template <class mutex_type>
 void testmutex_outer(std::map<std::string,std::vector<double>>& results, std::string const& name, double critical_fraction, double critical_duration) {
 
-    std::ostringstream truename;
-    truename << name << " (f=" << critical_fraction << ",d=" << critical_duration << ")";
-
-    std::vector<double>& data = results[truename.str()];
-
-    double const workItemTime = time_item() ,
-                 nilTime = time_nil();
-
-    int const num_items_critical = (critical_duration <= 0 ? 0 : (std::max)( int(critical_duration / workItemTime + 0.5), int(100 * nilTime / workItemTime + 0.5))),
-              num_items_noncritical = (num_items_critical <= 0 ? 0 : int( ( 1 - critical_fraction ) * num_items_critical / critical_fraction + 0.5 ));
+    double const workItemTime = time_item();
+    int const num_items_critical = (critical_duration <= 0 ? 0 : int(critical_duration / workItemTime + 0.5)),
+              num_items_noncritical = (num_items_critical <= 0 ? 0 : int(num_items_critical / critical_fraction - num_items_critical + 0.5));
 
     FOR_GAUNTLET(num_threads) {
 
         std::cerr << "Sleeping for 1 second.\n";
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        int const num_iterations = int(1.0/num_threads/(1E-7*exp(0.3*num_threads)) + 0.5);
+        int const num_iterations = int(1.0/num_threads/(2E-7*exp(0.1*num_threads)) + 0.5);
+
+        std::ostringstream truename;
+        truename << name << " (f=" << critical_fraction << ",d=" << critical_duration << ")";
         std::cerr << "running " << truename.str() << " #" << num_threads << ", " << num_iterations << " * " << num_items_noncritical << "\n" << std::flush;
 
         std::atomic<int> t[2], wc[2], wnc[2];
@@ -201,8 +179,8 @@ void testmutex_outer(std::map<std::string,std::vector<double>>& results, std::st
 
             mutex_type m;
 
-            start[pass] = clock();
 #ifdef USEOMP
+            start[pass] = clock();
             omp_set_num_threads(num_threads);
             std::atomic<int> _j(0);
             #pragma omp parallel
@@ -211,29 +189,33 @@ void testmutex_outer(std::map<std::string,std::vector<double>>& results, std::st
                 testmutex_inner(m, t[pass], wc[pass], wnc[pass], num_iterations, num_items_critical, num_items_noncritical, randomsc[j], randomsnc[j], pass==0);
                 num_threads = omp_get_num_threads();
             }
+            end[pass] = clock();
 #else
+            std::atomic<bool> go(false);
             std::vector<std::thread*> threads(num_threads);
             for(unsigned j = 0; j < num_threads; ++j)
                 threads[j] = new std::thread([&,j](){ 
-                        testmutex_inner(m, t[pass], wc[pass], wnc[pass], num_iterations, num_items_critical, num_items_noncritical, randomsc[j], randomsnc[j], pass==0);
+                        testmutex_inner(go, m, t[pass], wc[pass], wnc[pass], num_iterations, num_items_critical, num_items_noncritical, randomsc[j], randomsnc[j], pass==0);
                     }
                 );
-            for(unsigned j = 0; j < num_threads; ++j) {
+            start[pass] = clock();
+            go = true;
+            for(unsigned j = 0; j < num_threads; ++j)
                 threads[j]->join();
-                delete threads[j];
-            }
-#endif
             end[pass] = clock();
+            for(unsigned j = 0; j < num_threads; ++j)
+                delete threads[j];
+#endif
         }
         if(t[0] != t[1]) throw std::string("mismatched iteration counts");
-        if(wnc[0] != wnc[1]) throw std::string("mismatched work item counts");
+        if(wnc[0] != wnc[1] || wc[1] != num_items_critical*num_iterations*num_threads) throw std::string("mismatched work item counts");
 
         double elapsed_seconds_0 = (end[0] - start[0]) / double(CLOCKS_PER_SEC),
                elapsed_seconds_1 = (end[1] - start[1]) / double(CLOCKS_PER_SEC);
-        double time = (elapsed_seconds_1 - elapsed_seconds_0 - wc[1]*workItemTime) / num_iterations;
+        double time = (elapsed_seconds_1 - elapsed_seconds_0) / num_iterations - num_items_critical*workItemTime;
 
-        data.push_back(time);
-        std::cerr << truename.str() << " : " << num_threads << "," << elapsed_seconds_1 / num_iterations << " - " << elapsed_seconds_0 / num_iterations << " - " << wc[1]*workItemTime/num_iterations << " = " << time << "                                                 \n";
+        results[truename.str()].push_back(time);
+        std::cerr << truename.str() << " : " << num_threads << "," << elapsed_seconds_1 / num_iterations << " - " << elapsed_seconds_0 / num_iterations << " - " << num_items_critical*workItemTime << " = " << time << "                                                 \n";
     }
 }
 
@@ -366,10 +348,10 @@ int main(int argc, char * argv[]) {
 
     //measure up
     std::cerr << "measuring work item speed...\r";
-    std::cerr << "work item speed is " << time_item() << " per item, nil is " << time_nil() << "\n";
+    std::cerr << "work item speed is " << time_item() << " per item\n";
     try {
 
-        std::pair<double,double> testpoints[] = { /*{1E-1, 10E-6}, {5E-1, 2E-6},  {1, 0},*/ {3E-1, 50E-9}, };
+        std::pair<double,double> testpoints[] = { /*{1E-1, 10E-6}, {5E-1, 1E-6}, {1E-1, 1E-6} ,*/ {3E-1, 500E-9} };
         for(auto x : testpoints ) {
 
             std::map<std::string,std::vector<double>> results;
@@ -377,7 +359,7 @@ int main(int argc, char * argv[]) {
             //testbarrier_outer<std::barrier>(results, PREFIX"bar 1khz 100us", 1E3, x.second);
 
             std::string const names[] = { 
-                PREFIX"mcs", PREFIX"ttas", PREFIX"tkt", PREFIX"std"
+                PREFIX"dumbT", PREFIX"ttas", PREFIX"dumbF", PREFIX"mcs", PREFIX"tkt", PREFIX"std"
 #ifdef WIN32
                 ,PREFIX"srw"
 #endif
@@ -386,7 +368,7 @@ int main(int argc, char * argv[]) {
             //run -->
 
             mutex_tester<
-                mcs_mutex, ttas_mutex, ticket_mutex, std::mutex
+                dumb_mutex<true>, ttas_mutex, dumb_mutex<false>, mcs_mutex, ticket_mutex, std::mutex
 #ifdef WIN32
                 ,srw_mutex
 #endif
