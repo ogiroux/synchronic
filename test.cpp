@@ -26,372 +26,220 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-//#define __SYNCHRONIC_PURE_CONDITION
-//#define __SYNCHRONIC_CONDITION
-
-//#undef _WIN32_WINNT
-//#define _WIN32_WINNT 0x0602
-
-unsigned next_table[] = 
-    {
-        0, 1, 2, 3,         //0-3
-        4, 4, 6, 6,         //4-7
-        8, 8, 8, 8,         //8-11
-        12, 12, 12, 12,     //12-15
-        16, 16, 16, 16,     //16-19
-        16, 16, 16, 16,     //20-23
-        24, 24, 24, 24,     //24-27
-        24, 24, 24, 24,     //28-31
-        32, 32, 32, 32,     //32-35
-        32, 32, 32, 32,     //36-39
-        40, 40, 40, 40,     //40-43
-        40, 40, 40, 40,     //44-47
-        48, 48, 48, 48,     //48-51
-        48, 48, 48, 48,     //52-55
-        56, 56, 56, 56,     //56-59
-        56, 56, 56, 56,     //60-63
-    };
-
-//change this if you want to allow oversubscription of the system, by default only the range {1-(system size)} is tested
-#define FOR_GAUNTLET(x) for(unsigned x = (std::min)(std::thread::hardware_concurrency()*2,unsigned(sizeof(next_table)/sizeof(unsigned))); x; x = next_table[x-1])
-
-//#define FOR_GAUNTLET(x) for(unsigned x = 8; x;)
-
-//set this to override the benchmark of barriers to use OMP barriers instead of n3998 std::barrier
-//#define USEOMP
-
-#ifdef USEOMP
-#include <omp.h>
-#endif
-
-#include <iostream>
-#include <sstream>
-#include <algorithm>
-#include <string>
-#include <vector>
-#include <map>
-#include <cstring>
-#include <ctime>
-
-//#include <details/config>
-//#undef __SYNCHRONIC_COMPATIBLE
-
-#include <synchronic>
-#include <n3998>
+#define _WIN32_WINNT 0x0601
 
 #include "test.hpp"
 
-#if defined(__SYNCHRONIC_COMPATIBLE)
-    #define PREFIX "futex-"
-#elif defined(__SYNCHRONIC_BACKOFF)
-    #define PREFIX "backoff-"
-#elif defined(__SYNCHRONIC_CONDITION)
-    #define PREFIX "condition-"
-#elif defined(__SYNCHRONIC_PURE_CONDITION)
-    #define PREFIX "pure-condition-"
-#else
-    #define PREFIX "spin-"
+#include <string>
+#include <atomic>
+#include <random>
+#include <chrono>
+#include <iostream>
+#include <iomanip>
+
+
+#ifdef __linux__
+    #include <unistd.h>
+    #include <sys/times.h>
+    typedef tms cpu_time;
+    cpu_time get_cpu_time() { 
+        cpu_time t; 
+        times(&t); 
+        return t; 
+    }
+    std::chrono::nanoseconds cpu_time_consumed(cpu_time start, cpu_time end) {
+        auto nanoseconds_per_clock_tick = 1000000000 / sysconf(_SC_CLK_TCK);
+        auto clock_ticks_elapsed = (end.tms_utime - start.tms_utime) + (end.tms_stime - start.tms_stime);
+        return std::chrono::nanoseconds(clock_ticks_elapsed * nanoseconds_per_clock_tick);
+    }
 #endif
 
-//this test uses a custom Mersenne twister to eliminate implementation variation
-MersenneTwister mt;
+#ifdef _MSC_VER
+    static HANDLE self = GetCurrentProcess();
+    typedef std::pair<FILETIME,FILETIME> cpu_time;
+    cpu_time get_cpu_time() {
+        cpu_time t;
+        FILETIME ftime, fsys, fuser;
+        GetProcessTimes(self, &ftime, &ftime, &fsys, &fuser);
+        memcpy(&t.first, &fsys, sizeof(FILETIME));
+        memcpy(&t.second, &fuser, sizeof(FILETIME));
+        return t;
+    }
+    std::uint64_t make64(std::uint64_t low, std::uint64_t high) {
+        return low | (high << 32);
+    }
+    std::uint64_t make64(FILETIME ftime) {
+        return make64(ftime.dwLowDateTime, ftime.dwHighDateTime);
+    }
+    std::chrono::nanoseconds cpu_time_consumed(cpu_time start, cpu_time end) {
 
-int dummya = 1, dummyb =1;
+        auto nanoseconds_per_clock_tick = 100; //100-nanosecond intervals
+        auto clock_ticks_elapsed = (make64(end.first) - make64(start.first)) + (make64(end.second) - make64(start.second));
+        return std::chrono::nanoseconds(clock_ticks_elapsed * nanoseconds_per_clock_tick);
+    }
+#endif
 
-int dummy1 = 1;
-std::atomic<int> dummy2(1);
-std::atomic<int> dummy3(1);
+using my_clock = std::conditional<std::chrono::high_resolution_clock::is_steady,
+    std::chrono::high_resolution_clock, std::chrono::steady_clock>::type;
 
-double time_item(int const count = (int)1E8)  {
+static constexpr int default_count = 1 << 28;
 
-    clock_t const start = clock();
+template <class R>
+std::chrono::nanoseconds compute_work_item_cost(R r)  {
 
-    for(int i = 0;i < count; ++i)
-        mt.integer();
+    auto start = my_clock::now();
 
-    clock_t const end = clock();
-    double elapsed_seconds = (end - start) / double(CLOCKS_PER_SEC);
+    //perform work
+    for (int i = 0; i < default_count; ++i)
+        r.discard(1);
 
-    return elapsed_seconds / count;
+    auto end = my_clock::now();
+       
+    return std::chrono::nanoseconds(end - start) / default_count;
 }
 
-template <class mutex_type>
-void testmutex_inner(std::atomic<bool>& go, mutex_type& m, std::atomic<int>& t,std::atomic<int>& wc,std::atomic<int>& wnc, int const num_iterations, 
-                     int const num_items_critical, int const num_items_noncritical, MersenneTwister& mtc, MersenneTwister& mtnc, bool skip) {
-
-    while(!go)
-        __synchronic_relax();
-
-    for(int k = 0; k < num_iterations; ++k) {
-
-        if(num_items_noncritical) {
-            // Do some work without holding the lock
-            int workunits = num_items_noncritical;//(int) (mtnc.poissonInterval((float)num_items_noncritical) + 0.5f);
-            for (int i = 1; i < workunits; i++)
-                mtnc.integer();       // Do one work unit
-            wnc.fetch_add(workunits,std::memory_order_relaxed);
-        }
-
-        t.fetch_add(1,std::memory_order_relaxed);
-
-        if(!skip) {
-            std::unique_lock<mutex_type> l(m);
-            if(num_items_critical) {
-                // Do some work while holding the lock
-                int workunits = num_items_critical;//(int) (mtc.poissonInterval((float)num_items_critical) + 0.5f);
-                for (int i = 1; i < workunits; i++)
-                    mtc.integer();       // Do one work unit
-                wc.fetch_add(workunits,std::memory_order_relaxed);
+class run {
+    std::atomic<bool> go = false, stop = false;
+    std::atomic<std::uint64_t> running = 0, iterations = 0;
+public :
+    struct report {
+        std::chrono::nanoseconds wall_time, cpu_time;
+        std::uint64_t steps;
+    };
+    template <class F>
+    report time(int threads, F f) {
+        for (int i = 0; i < threads; ++i)
+            std::thread([&,f, i]() mutable {
+                running++;
+                while (go != true) std::this_thread::yield();
+                while (stop != true) {
+                    f(i);
+                    iterations.fetch_add(1, std::memory_order_relaxed);
+                }
+                running--;
+            }).detach();
+        while (running != threads) std::this_thread::yield();
+        auto cpu_start = get_cpu_time();
+        auto start = my_clock::now();
+        go = true;
+        std::uint64_t it1 = iterations;
+        if (threads)
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        else {
+            for (int i = 0; i < default_count; ++i) {
+                f(0);
+                iterations.fetch_add(1, std::memory_order_relaxed);
             }
         }
-    }
-}
-template <class mutex_type>
-void testmutex_outer(std::map<std::string,std::vector<double>>& results, std::string const& name, double critical_fraction, double critical_duration) {
-
-    double const workItemTime = time_item();
-    int const num_items_critical = (critical_duration <= 0 ? 0 : int(critical_duration / workItemTime + 0.5)),
-              num_items_noncritical = (num_items_critical <= 0 ? 0 : int(num_items_critical / critical_fraction - num_items_critical + 0.5));
-
-    FOR_GAUNTLET(num_threads) {
-
-        std::cerr << "Sleeping for 1 second.\n";
+        std::uint64_t it2 = iterations;
+        auto cpu_end = get_cpu_time();
+        auto end = my_clock::now();
+        stop = true;
+        while (running != 0) std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        int const num_iterations = int(1.0/num_threads/(2E-7*exp(0.1*num_threads)) + 0.5);
+        report r;
+        r.wall_time = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+        r.cpu_time = cpu_time_consumed(cpu_start, cpu_end);
+        r.steps = (it2 - it1);
 
-        std::ostringstream truename;
-        truename << name << " (f=" << critical_fraction << ",d=" << critical_duration << ")";
-        std::cerr << "running " << truename.str() << " #" << num_threads << ", " << num_iterations << " * " << num_items_noncritical << "\n" << std::flush;
-
-        std::atomic<int> t[2], wc[2], wnc[2];
-
-        clock_t start[2], end[2];
-        for(int pass = 0; pass < 2; ++pass) {
-
-            t[pass] = 0;
-            wc[pass] = 0;
-            wnc[pass] = 0;
-
-            srand(num_threads);
-            std::vector<MersenneTwister> randomsnc(num_threads), 
-                                         randomsc(num_threads);
-
-            mutex_type m;
-
-#ifdef USEOMP
-            start[pass] = clock();
-            omp_set_num_threads(num_threads);
-            std::atomic<int> _j(0);
-            #pragma omp parallel
-            {
-                int const j = _j.fetch_add(1,std::memory_order_relaxed);
-                testmutex_inner(m, t[pass], wc[pass], wnc[pass], num_iterations, num_items_critical, num_items_noncritical, randomsc[j], randomsnc[j], pass==0);
-                num_threads = omp_get_num_threads();
-            }
-            end[pass] = clock();
-#else
-            std::atomic<bool> go(false);
-            std::vector<std::thread*> threads(num_threads);
-            for(unsigned j = 0; j < num_threads; ++j)
-                threads[j] = new std::thread([&,j](){ 
-                        testmutex_inner(go, m, t[pass], wc[pass], wnc[pass], num_iterations, num_items_critical, num_items_noncritical, randomsc[j], randomsnc[j], pass==0);
-                    }
-                );
-            start[pass] = clock();
-            go = true;
-            for(unsigned j = 0; j < num_threads; ++j)
-                threads[j]->join();
-            end[pass] = clock();
-            for(unsigned j = 0; j < num_threads; ++j)
-                delete threads[j];
-#endif
-        }
-        if(t[0] != t[1]) throw std::string("mismatched iteration counts");
-        if(wnc[0] != wnc[1] || wc[1] != num_items_critical*num_iterations*num_threads) throw std::string("mismatched work item counts");
-
-        double elapsed_seconds_0 = (end[0] - start[0]) / double(CLOCKS_PER_SEC),
-               elapsed_seconds_1 = (end[1] - start[1]) / double(CLOCKS_PER_SEC);
-        double time = (elapsed_seconds_1 - elapsed_seconds_0) / num_iterations - num_items_critical*workItemTime;
-
-        results[truename.str()].push_back(time);
-        std::cerr << truename.str() << " : " << num_threads << "," << elapsed_seconds_1 / num_iterations << " - " << elapsed_seconds_0 / num_iterations << " - " << num_items_critical*workItemTime << " = " << time << "                                                 \n";
+        return r;
     }
-}
+};
 
-template <class barrier_type>
-void testbarrier_inner(barrier_type& b, int const num_threads, int const j, std::atomic<int>& t,std::atomic<int>& w, 
-                       int const num_iterations_odd, int const num_iterations_even,
-                       int const num_items_noncritical, MersenneTwister& mt, bool skip) {
-
-    for(int k = 0; k < (std::max)(num_iterations_even,num_iterations_odd); ++k) {
-
-        if(k >= (~j & 0x1 ? num_iterations_odd : num_iterations_even )) {
-            if(!skip)
-                b.arrive_and_drop();
-            break;
-        }
-
-        if(num_items_noncritical) {
-            // Do some work without holding the lock
-            int workunits = (int) (mt.poissonInterval((float)num_items_noncritical) + 0.5f);
-            for (int i = 1; i < workunits; i++)
-                mt.integer();       // Do one work unit
-            w.fetch_add(workunits,std::memory_order_relaxed);
-        }
-
-        t.fetch_add(1,std::memory_order_relaxed);
-
-        if(!skip) {
-            int const thiscount = (std::min)(k+1,num_iterations_odd)*((num_threads>>1)+(num_threads&1)) + (std::min)(k+1,num_iterations_even)*(num_threads>>1);
-            if(t.load(std::memory_order_relaxed) > thiscount)
-                std::cerr << "FAILURE: some threads have run ahead of the barrier (" << t.load(std::memory_order_relaxed) << ">" <<  thiscount << ").\n";
-#ifdef USEOMP
-            #pragma omp barrier
-#else
-            b.arrive_and_wait();
-#endif
-            if(t.load(std::memory_order_relaxed) < thiscount)
-                std::cerr << "FAILURE: some threads have fallen behind the barrier (" << t.load(std::memory_order_relaxed) << "<" << thiscount << ").\n";
-        }
-    }
-}
-template <class barrier_type>
-void testbarrier_outer(std::map<std::string,std::vector<double>>& results, std::string const& name, double barrier_frequency, double phase_duration, bool randomIterations = false) {
-
-    std::vector<double>& data = results[name];
-
-    double const workItemTime = time_item();
-    int const num_items_noncritical = int( phase_duration / workItemTime + 0.5 );
-
-    FOR_GAUNTLET(num_threads) {
-
-        int const num_iterations = int( barrier_frequency );
-        std::cerr << "running " << name << " #" << num_threads << ", " << num_iterations << " * " << num_items_noncritical << "\r" << std::flush;
-
-        srand(num_threads);
-
-        MersenneTwister mt;
-        int const num_iterations_odd = randomIterations ? int(mt.poissonInterval((float)num_iterations)+0.5f) : num_iterations,
-                  num_iterations_even = randomIterations ? int(mt.poissonInterval((float)num_iterations)+0.5f) : num_iterations;
-
-        std::atomic<int> t[2], w[2];
-        std::chrono::time_point<std::chrono::high_resolution_clock> start[2], end[2];
-        for(int pass = 0; pass < 2; ++pass) {
-
-            t[pass] = 0;
-            w[pass] = 0;
-
-            srand(num_threads);
-            std::vector<MersenneTwister> randoms(num_threads);
-
-            barrier_type b(num_threads);
-
-            start[pass] = std::chrono::high_resolution_clock::now();
-#ifdef USEOMP
-            omp_set_num_threads(num_threads);
-            std::atomic<int> _j(0);
-            #pragma omp parallel
-            {
-                int const j = _j.fetch_add(1,std::memory_order_relaxed);
-                testbarrier_inner(b, num_threads, j, t[pass], w[pass], num_iterations_odd, num_iterations_even, num_items_noncritical, randoms[j], pass==0);
-                num_threads = omp_get_num_threads();
-            }
-#else
-            std::vector<std::thread*> threads(num_threads);
-            for(unsigned j = 0; j < num_threads; ++j)
-                threads[j] = new std::thread([&,j](){ 
-                    testbarrier_inner(b, num_threads, j, t[pass], w[pass], num_iterations_odd, num_iterations_even, num_items_noncritical, randoms[j], pass==0);
-                });
-            for(unsigned j = 0; j < num_threads; ++j) {
-                threads[j]->join();
-                delete threads[j];
-            }
-#endif
-            end[pass] = std::chrono::high_resolution_clock::now();
-        }
-
-        if(t[0] != t[1]) throw std::string("mismatched iteration counts");
-        if(w[0] != w[1]) throw std::string("mismatched work item counts");
-
-        int const phases = (std::max)(num_iterations_odd, num_iterations_even);
-
-        std::chrono::duration<double> elapsed_seconds_0 = end[0]-start[0],
-                                      elapsed_seconds_1 = end[1]-start[1];
-        double const time = (elapsed_seconds_1.count() - elapsed_seconds_0.count()) / phases;
-
-        data.push_back(time);
-        std::cerr << name << " : " << num_threads << "," << elapsed_seconds_1.count() / phases << " - " << elapsed_seconds_0.count() / phases << " = " << time << "                                                 \n";
-    }
-}
-
-template <class... T>
-struct mutex_tester;
 template <class F>
-struct mutex_tester<F> {
-    static void run(std::map<std::string,std::vector<double>>& results, std::string const name[], double critical_fraction, double critical_duration) {
-        testmutex_outer<F>(results, *name, critical_fraction, critical_duration);
+void do_run(std::string const& what, int threads, F f, std::chrono::nanoseconds expected)
+{
+    std::cout << "measuring " << what << "...\r";
+    auto r = run().time(threads, f);
+    std::cout << what << " (" << threads << "T)" << std::endl;
+    std::cout << "\ttotal progress : " << r.steps << " steps in " << r.wall_time.count() << "ns" << std::endl;
+    std::cout << "\toverheads on " << expected.count() << " ns/step : " << std::endl;
+    auto wall_time = (r.wall_time / r.steps - expected).count();
+    std::cout << "\t\t" << std::left << std::setfill(' ') << std::setw(14) << "wall-time = " << wall_time << " ns/step (" << double(wall_time) / expected.count() * 100 << "%)" << std::endl;
+    auto cpu_time = (r.cpu_time / r.steps - expected).count();
+    std::cout << "\t\t" << std::left << std::setfill(' ') << std::setw(14) << "cpu-time =" << cpu_time << " ns/step (" << double(cpu_time) / expected.count()*100 << "%)" << std::endl;
+    std::cout << std::endl;
+}
+
+int main(int argc, const char * argv[]) {
+
+    std::mt19937 r;
+
+    std::cout << "measuring work item cost...\r";
+    auto cost = compute_work_item_cost(r);
+    std::cout << "work item cost : " << cost.count() << " nanoseconds per iteration\n";
+    std::cout << std::endl;
+
+    do_run("control 0-thread", 1, [=](auto) mutable {
+        r.discard(1); }, cost);
+    do_run("control 1-thread", 1, [=](auto) mutable { 
+        r.discard(1); }, cost);
+
+    std::mutex m1;
+    do_run("std::mutex uncontended 1-thread", 1, [=,&m1](auto) mutable {
+        { std::unique_lock<std::mutex>(m1); }
+        r.discard(1); 
+    }, cost);
+    ttas_mutex m2;
+    do_run("ttas_mutex uncontended 1-thread", 1, [=,&m2](auto) mutable {
+        { std::unique_lock<ttas_mutex>(m2); }
+        r.discard(1); 
+    }, cost);
+
+    auto const N = std::thread::hardware_concurrency();
+    constexpr int k_limit = 1024;
+    if (N > k_limit) {
+        std::cout << "ERROR: Cannot continue because there are more than " << k_limit << " hardware threads on this system.\n";
+        std::cout << "ERROR: This is an arbitrary limit. Feel free to raise it, recompile and rerun.\n";
     }
-};
-template <class F, class... T>
-struct mutex_tester<F,T...> {
-    static void run(std::map<std::string,std::vector<double>>& results, std::string const name[], double critical_fraction, double critical_duration) {
-        mutex_tester<F>::run(results, name, critical_fraction, critical_duration);
-        mutex_tester<T...>::run(results, ++name, critical_fraction, critical_duration);
-    }
-};
 
-int main(int argc, char * argv[]) {
+    do_run("control N-thread", N, [=](auto i) mutable {
+        r.discard(1); 
+    }, cost);
+    std::mutex m1N[k_limit];
+    do_run("std::mutex uncontended N-thread", N, [=,&m1N](auto i) mutable {
+        auto& m = m1N[i];
+        { std::unique_lock<std::mutex> l(m); }
+        r.discard(1); 
+    }, cost);
+    ttas_mutex m2N[k_limit];
+    do_run("ttas_mutex uncontended N-thread", N, [=,&m2N](auto i) mutable {
+        auto& m = m2N[i];
+        { std::unique_lock<ttas_mutex> l(m); }
+        r.discard(1);
+    }, cost);
 
-    //warm up
-    time_item();
+    do_run("std::mutex low-p contended N-thread", N, [=,&m1N](auto i) mutable {
+        auto& m = m1N[r() & 0x7];
+        { std::unique_lock<std::mutex> l(m); }
+    }, cost);
+    do_run("ttas_mutex low-p contended N-thread", N, [=, &m2N](auto i) mutable {
+        auto& m = m2N[r() & 0x7];
+        { std::unique_lock<ttas_mutex> l(m); }
+    }, cost);
 
-    //measure up
-    std::cerr << "measuring work item speed...\r";
-    std::cerr << "work item speed is " << time_item() << " per item\n";
-    try {
+    auto short_time = std::chrono::nanoseconds(300);
+    auto short_count = short_time / cost;
+    do_run("std::mutex short contended N-thread", N, [=, &m1](auto) mutable {
+        std::unique_lock<std::mutex> l(m1);
+        r.discard(short_count);
+    }, short_time);
+    do_run("ttas_mutex short contended N-thread", N, [=, &m2](auto) mutable {
+        std::unique_lock<ttas_mutex> l(m2); 
+        r.discard(short_count);
+    }, short_time);
 
-        std::pair<double,double> testpoints[] = { /*{1E-1, 10E-6}, {5E-1, 1E-6}, {1E-1, 1E-6} ,*/ {3E-1, 500E-9} };
-        for(auto x : testpoints ) {
+    auto long_time = std::chrono::milliseconds(10);
+    auto long_count = long_time / cost;
+    do_run("std::mutex long contended N-thread", N, [=, &m1](auto) mutable {
+        std::unique_lock<std::mutex> l(m1);
+        r.discard(long_count);
+    }, long_time);
+    do_run("ttas_mutex long contended N-thread", N, [=, &m2](auto) mutable {
+        std::unique_lock<ttas_mutex> l(m2);
+        r.discard(long_count);
+    }, long_time);
 
-            std::map<std::string,std::vector<double>> results;
-
-            //testbarrier_outer<std::barrier>(results, PREFIX"bar 1khz 100us", 1E3, x.second);
-
-            std::string const names[] = { 
-                PREFIX"dumbT", PREFIX"ttas", PREFIX"dumbF", PREFIX"mcs", PREFIX"tkt", PREFIX"std"
-#ifdef WIN32
-                ,PREFIX"srw"
-#endif
-            };
-
-            //run -->
-
-            mutex_tester<
-                dumb_mutex<true>, ttas_mutex, dumb_mutex<false>, mcs_mutex, ticket_mutex, std::mutex
-#ifdef WIN32
-                ,srw_mutex
-#endif
-            >::run(results, names, x.first, x.second);
-
-            //<-- run
-
-            std::cout << "threads";
-            for(auto & i : results)
-                std::cout << ",\"" << i.first << '\"';
-            std::cout << std::endl;
-            int j = 0;
-            FOR_GAUNTLET(num_threads) {
-                std::cout << num_threads;
-                for(auto & i : results)
-                    std::cout << ',' << i.second[j];
-                std::cout << std::endl;
-                ++j;
-            }
-        }
-    }
-    catch(std::string & e) {
-        std::cerr << "EXCEPTION : " << e << std::endl;
-    }
     return 0;
 }

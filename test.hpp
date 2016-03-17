@@ -92,25 +92,21 @@ struct ttas_mutex {
 	ttas_mutex& operator=(const ttas_mutex&) = delete;
 
     void lock() {
-
-        sync.expect(locked, [&]() -> bool {
-
+        while(1) {
             bool state = false;
-            return locked.compare_exchange_weak(state,true,std::memory_order_acquire);
-        });
+            if (locked.compare_exchange_weak(state, true, std::memory_order_acquire))
+                return;
+            sync.wait_for_change(locked, state, std::memory_order_relaxed);
+        }
     }
 
     void unlock() {
-
-        sync.notify(locked, [&]() {
-
-            locked.store(false,std::memory_order_release);
-        });
+        sync.notify_one(locked, false, std::memory_order_release);
     }
 
 private :
     std::atomic<bool> locked;
-    std::synchronic<bool> sync;
+    std::experimental::synchronic<bool> sync;
 };
 
 struct ticket_mutex {
@@ -124,22 +120,18 @@ struct ticket_mutex {
     void lock() {
 
         int const me = queue.fetch_add(1, std::memory_order_relaxed);
-        sync.expect(active, [&]() -> bool {
-
-            return active.load(std::memory_order_acquire) == me;
-        });
+        sync.wait(active, me, std::memory_order_acquire);
     }
 
     void unlock() {
-        
-        sync.notify(active, [&]() {
 
-            active.fetch_add(1, std::memory_order_release);
+        sync.notify_all(active, [](std::atomic<int>& atom) {
+            atom.fetch_add(1, std::memory_order_release);
         });
     }
 private :
     std::atomic<int> active, queue;
-    std::synchronic<int> sync;
+    std::experimental::synchronic<int> sync;
 };
 
 struct mcs_mutex {
@@ -157,8 +149,8 @@ struct mcs_mutex {
             unique_lock * const head = m.head.exchange(this,std::memory_order_acquire);
             if(__builtin_expect(head != nullptr,0)) {
                 
-                head->sync_next.notify(head->next, this, std::notify_one);
-                sync_ready.expect(ready, true);
+                head->sync_next.notify_one(head->next, this);
+                sync_ready.wait(ready, true);
             }
         }
         
@@ -173,13 +165,9 @@ struct mcs_mutex {
                 unique_lock * n = next.load(std::memory_order_acquire);
                 if(n == nullptr) {
 
-                    sync_next.expect(next, [&]() -> bool { 
-
-                        n = next.load(std::memory_order_acquire);
-                        return n != nullptr;
-                    });
+                    sync_next.wait_for_change(next, nullptr, std::memory_order_acquire);
                 }
-                n->sync_ready.notify(n->ready, true);
+                n->sync_ready.notify_one(n->ready, true);
             }
         }
 
@@ -187,8 +175,8 @@ struct mcs_mutex {
         mcs_mutex & m;
         std::atomic<unique_lock*> next;
         std::atomic<bool> ready;
-        std::synchronic<unique_lock*> sync_next;
-        std::synchronic<bool> sync_ready;
+        std::experimental::synchronic<unique_lock*> sync_next;
+        std::experimental::synchronic<bool> sync_ready;
     };
 
 private :
@@ -204,52 +192,5 @@ namespace std {
 	    unique_lock& operator=(const unique_lock&) = delete;
     };
 }
-
-#include <cmath>
-#include <stdlib.h>
-
-//-------------------------------------
-//  MersenneTwister
-//-------------------------------------
-#define MT_IA  397
-#define MT_LEN 624
-
-class MersenneTwister
-{
-    volatile int m_index;
-    volatile unsigned long m_buffer[MT_LEN][64/sizeof(unsigned long)];
-    char pad[4096];
-
-public:
-    MersenneTwister() {
-        for (int i = 0; i < MT_LEN; i++)
-            m_buffer[i][0] = rand();
-        m_index = 0;
-        for (int i = 0; i < MT_LEN * 100; i++)
-            integer();
-    }
-    unsigned long integer() {
-        // Indices
-        int i = m_index;
-        int i2 = m_index + 1; if (i2 >= MT_LEN) i2 = 0; // wrap-around
-        int j = m_index + MT_IA; if (j >= MT_LEN) j -= MT_LEN; // wrap-around
-
-        // Twist
-        unsigned long s = (m_buffer[i][0] & 0x80000000) | (m_buffer[i2][0] & 0x7fffffff);
-        unsigned long r = m_buffer[j][0] ^ (s >> 1) ^ ((s & 1) * 0x9908B0DF);
-        m_buffer[m_index][0] = r;
-        m_index = i2;
-
-        // Swizzle
-        r ^= (r >> 11);
-        r ^= (r << 7) & 0x9d2c5680UL;
-        r ^= (r << 15) & 0xefc60000UL;
-        r ^= (r >> 18);
-        return r;
-    }
-    float poissonInterval(float ooLambda) { 
-        return -logf(1.0f - integer() * 2.3283e-10f) * ooLambda; 
-    }
-};
 
 #endif //TEST_HPP

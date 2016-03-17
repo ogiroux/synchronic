@@ -21,9 +21,6 @@
     <ClInclude Include="include\n3998">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\details\config">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="test.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

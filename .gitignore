@@ -24,3 +24,9 @@ test_spin
 
 test
 *.user
+*.idb
+*.opendb
+*.ipdb
+Release/synchronic.iobj
+*.iobj
+x64/Debug/synchronic.ilk
