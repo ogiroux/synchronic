@@ -48,7 +48,7 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     #define __builtin_expect(condition,common) condition
     #define __synchronic_relax _mm_pause
 #elif defined(__linux__)
-    #define __synchronic_relax() asm volatile("rep; nop" ::: "memory")
+    static inline void __synchronic_relax() { asm volatile("rep; nop" ::: "memory"); }
 #else
     #define __synchronic_relax __synchronic_yield
 #endif
@@ -73,10 +73,10 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     #include <sys/syscall.h>
     #include <climits>
     template < class Rep, class Period>
-    static inline timespec to_timespec(chrono::duration<Rep, Period> const& delta) {
+    static inline timespec to_timespec(std::chrono::duration<Rep, Period> const& delta) {
         struct timespec ts;
-        ts.tv_sec = static_cast<long>(chrono::duration_cast<chrono::seconds>(delta).count());
-        ts.tv_nsec = static_cast<long>(chrono::duration_cast<chrono::nanoseconds>(delta).count());
+        ts.tv_sec = static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(delta).count());
+        ts.tv_nsec = static_cast<long>(std::chrono::duration_cast<std::chrono::nanoseconds>(delta).count());
         return ts;
     }
     static inline long futex(void const* addr1, int op, int val1) {
@@ -228,7 +228,7 @@ namespace std {
                     __synchronic_wait(&object, nval);
                 }
                 template <class Rep, class Period>
-                void wait_for_change_for(const atomic<T>& object, T val, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
+                void wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
                     auto guard = make_wait_guard();
                     __synchronic_wait_timed(&object, nval, rel_time);
                 }
@@ -246,8 +246,9 @@ namespace std {
             };
             template <class T>
             class __indirect_futex_synchronic : protected __futex_synchronic<int> {
-                atomic<int> ticket = 0, lastuser = 0;
+                mutable atomic<int> ticket, lastuser;
             public:
+                __indirect_futex_synchronic() : ticket(0), lastuser(0) { }
                 void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
                     auto me = ticket.fetch_add(1, memory_order_relaxed);
                     while (1) {
@@ -258,7 +259,7 @@ namespace std {
                     }
                 }
                 template <class Rep, class Period>
-                void wait_for_change_for(const atomic<T>& object, T val, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
+                void wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
                     auto me = ticket.fetch_add(1, memory_order_relaxed);
                     lastuser.store(me, memory_order_seq_cst);
                     if (object.load(order) != nval)
@@ -269,7 +270,7 @@ namespace std {
                 void notify(atomic<T>& object, F func, bool const all) {
                     auto me = ticket.fetch_add(1, memory_order_relaxed);
                     func(object);
-                    __futex_synchronic<int>::notify(lastuser, [=](atomic<T>& object) { object.store(me, memory_order_release); }, all);
+                    __futex_synchronic<int>::notify(lastuser, [=](atomic<int>& object) { lastuser.store(me, memory_order_release); }, all);
                 }
             }; 
 #endif //__SYNCHRONIC_HAS_FUTEX
