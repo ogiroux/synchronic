@@ -40,6 +40,7 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sstream>
 #include <fstream>
 #include <iomanip>
+#include <algorithm>
 
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -134,7 +135,7 @@ using my_clock = std::conditional<std::chrono::high_resolution_clock::is_steady,
     std::chrono::high_resolution_clock, std::chrono::steady_clock>::type;
 
 static constexpr int measure_count = 1 << 30;
-static constexpr int time_target_in_seconds = 5;
+static constexpr int time_target_in_seconds = 10;
 
 template <class R>
 double compute_work_item_cost(R r)  {
@@ -238,7 +239,7 @@ double do_run(std::ostream& csv, std::string const& what, int threads, F f, int 
     std::cout << std::endl;
     
     csv << "\"" << what << "\"," << threads << ',' << r.steps << ',' << r.wall_time << ',' << expected << ','
-        << wall_time << ','  << cpu_time << ','  << user_time << ','  << system_time << std::endl;
+        << wall_time / expected << ','  << cpu_time / expected << ','  << user_time / cpu_time << ','  << system_time / cpu_time << std::endl;
     
     return wall_time / count;
 }
@@ -248,7 +249,7 @@ int main(int argc, const char * argv[]) {
     std::ostringstream nullstream;
     std::ofstream csv("output.csv");
     
-    csv << "name, threads, steps, time, expected, real, cpu, user, system" << std::endl;
+    csv << "name, threads, steps, time, expected, real/expected, cpu/expected, user/cpu, system/cpu" << std::endl;
     
     std::mt19937 r;
 
@@ -258,7 +259,7 @@ int main(int argc, const char * argv[]) {
     std::cout << "Measuring work item cost...\r" << std::flush;
     auto cost = compute_work_item_cost(r);
     
-    auto target_count = std::uint64_t(5E1 / cost);
+    auto target_count = int(5E1 / cost);
     std::cout << "Work item cost : " << cost << " ns/iteration, targeting " << target_count << " iterations/step.\n";
     std::cout << std::endl;
 

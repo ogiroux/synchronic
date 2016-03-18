@@ -147,7 +147,7 @@ struct mcs_mutex {
         unique_lock(mcs_mutex & m) : m(m), next(nullptr), ready(false) {
 
             unique_lock * const head = m.head.exchange(this,std::memory_order_acquire);
-            if(__builtin_expect(head != nullptr,0)) {
+            if(head != nullptr) {
                 
                 head->sync_next.notify_one(head->next, this);
                 sync_ready.wait(ready, true);
@@ -160,7 +160,7 @@ struct mcs_mutex {
         ~unique_lock() {
 
             unique_lock * head = this;
-            if(__builtin_expect(!m.head.compare_exchange_strong(head,nullptr,std::memory_order_release, std::memory_order_relaxed),0)) {
+            if(!m.head.compare_exchange_strong(head,nullptr,std::memory_order_release, std::memory_order_relaxed)) {
 
                 unique_lock * n = next.load(std::memory_order_acquire);
                 if(n == nullptr) {

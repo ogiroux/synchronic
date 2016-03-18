@@ -91,9 +91,9 @@ inline namespace concurrency_v2 {
     }
     template <class T>
     struct __synchronic_native {
-        enum { value = is_pod<T>::value && (sizeof(T) <= 8); }
-
+        static constexpr bool value = is_pod<T>::value && (sizeof(T) <= 8);
     };
+
 #endif
 
 #ifdef __linux__
@@ -136,25 +136,11 @@ inline namespace concurrency_v2 {
 
     static constexpr int __magic_number = 42;
 
-    template <class T>
-    class __synchronic_updown_guard {
-        atomic<int>& object;
-    public:
-        __synchronic_updown_guard(atomic<T>& object) noexcept : object(object) { object.fetch_add( 1, memory_order_acquire); }
-        ~__synchronic_updown_guard()                                           { object.fetch_add(-1, memory_order_release); }
-        __synchronic_updown_guard(__synchronic_updown_guard&&) = default;
-        __synchronic_updown_guard& operator=(__synchronic_updown_guard&&) = default;
-        __synchronic_updown_guard(const __synchronic_updown_guard&) = delete;
-        __synchronic_updown_guard& operator=(const __synchronic_updown_guard&) = delete;
-    };
-    template <class T>
-    __synchronic_updown_guard<T> __synchronic_make_updown_guard(atomic<T>& object) noexcept { return __synchronic_updown_guard<T>(object); }
-
     template <class F>
     bool __synchronic_spin_for_condition(F func, int attempts) noexcept {
         int i = 0;
         for (; (attempts < 0 || i < attempts) && i < __magic_number; __synchronic_relax(), ++i)
-            if (__builtin_expect(func(), 1))
+            if (__synchronic_expect(func(), 1))
                 return true;
         for (; (attempts < 0 || i < attempts); __synchronic_yield(), ++i)
             if (func())
@@ -211,13 +197,29 @@ inline namespace concurrency_v2 {
     };
 
     class __racy_synchronic_base {
-        mutable atomic<int> expect_count, notify_count;
+        alignas(64) mutable atomic<int> expect_count;
+        alignas(64) mutable atomic<int> notify_count;
     public:
-        __racy_synchronic_base() : expect_count(0), notify_count(0) { }
-        decltype(auto) make_wait_guard() const noexcept { return __synchronic_make_updown_guard(expect_count); }
-        decltype(auto) make_notify_guard() const noexcept { return __synchronic_make_updown_guard(notify_count); }
-        bool has_wait() const noexcept { return expect_count.load() != 0; }
-        ~__racy_synchronic_base() {
+        class guard {
+            atomic<int>& object;
+        public:
+            inline guard(atomic<int>& object) noexcept : object(object) {
+                object.fetch_add(1, memory_order_acquire);
+            }
+            inline ~guard() {
+                object.fetch_add(-1, memory_order_release);
+            }
+            inline guard(guard&&) = default;
+            inline guard& operator=(guard&&) = default;
+            inline guard(const guard&) = delete;
+            inline guard& operator=(const guard&) = delete;
+        };
+
+        inline __racy_synchronic_base() : expect_count(0), notify_count(0) { }
+        inline guard make_wait_guard() const noexcept { return guard(expect_count); }
+        inline guard make_notify_guard() const noexcept { return guard(notify_count); }
+        inline bool has_wait() const noexcept { return expect_count.fetch_add(0,memory_order_acq_rel) != 0; }
+        inline ~__racy_synchronic_base() {
             __synchronic_spin_for(notify_count, 0, memory_order_acquire);
         }
     };
@@ -246,12 +248,12 @@ inline namespace concurrency_v2 {
         void notify(atomic<T>& object, F func, bool const all) {
             auto guard = make_notify_guard();
             func(object);
-            if (__builtin_expect(!has_wait(), 1))
+            if (__synchronic_expect(!has_wait(), 1))
                 return;
             {
                 unique_lock<mutex> l(m);
             }
-            if (__builtin_expect(all, 1))
+            if (__synchronic_expect(all, 1))
                 c.notify_all();
             else
                 c.notify_one();
@@ -277,9 +279,9 @@ inline namespace concurrency_v2 {
         void notify(atomic<T>& object, F func, bool const all) {
             auto guard = make_notify_guard();
             func(object);
-            if (__builtin_expect(!has_wait(), 1))
+            if (__synchronic_expect(!has_wait(), 1))
                 return;
-            if (__builtin_expect(all, 1))
+            if (__synchronic_expect(all, 1))
                 __synchronic_wake_all(&object);
             else
                 __synchronic_wake_one(&object);
@@ -357,7 +359,7 @@ inline namespace concurrency_v2 {
         void wait(const atomic<T>& object, T desired, 
           memory_order order = memory_order_seq_cst, 
           wait_hint hint = wait_hint::optimize_latency) const {
-            if (__builtin_expect(__synchronic_spin_for(object, desired, order, __synchronic_spin_attempts(hint)), 1))
+            if (__synchronic_expect(__synchronic_spin_for(object, desired, order, __synchronic_spin_attempts(hint)), 1))
                 return;
             for (auto t = object.load(order); t != desired; t = object.load(order))
                 wait_for_change(object, t, memory_order_relaxed, hint);
@@ -365,7 +367,7 @@ inline namespace concurrency_v2 {
         void wait_for_change(const atomic<T>& object, T current, 
           memory_order order = memory_order_seq_cst, 
           wait_hint hint = wait_hint::optimize_latency) const {
-            if (__builtin_expect(__synchronic_spin_for_change(object, current, order, __synchronic_spin_attempts(hint)), 1))
+            if (__synchronic_expect(__synchronic_spin_for_change(object, current, order, __synchronic_spin_attempts(hint)), 1))
                 return;
             base::wait_for_change(object, current, order);
         }
@@ -382,7 +384,7 @@ inline namespace concurrency_v2 {
           chrono::duration<Rep, Period> const& rel_time, 
           memory_order order = memory_order_seq_cst, 
           wait_hint hint = wait_hint::optimize_latency) const {
-            if (__builtin_expect(__synchronic_spin_for_change(object, current, order, __synchronic_spin_attempts(hint)), 1))
+            if (__synchronic_expect(__synchronic_spin_for_change(object, current, order, __synchronic_spin_attempts(hint)), 1))
                 return true;
             return base::wait_for_change_for(object, current, order, rel_time);
         }
