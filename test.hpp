@@ -49,7 +49,7 @@ struct dumb_mutex {
                 return;
             while(locked.load(std::memory_order_relaxed))
                 if(!truly)
-                    __synchronic_yield();
+                    std::this_thread::yield();
         };
     }
 

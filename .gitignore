@@ -30,3 +30,5 @@ test
 Release/synchronic.iobj
 *.iobj
 x64/Debug/synchronic.ilk
+
+include/details/config

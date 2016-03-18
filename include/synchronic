@@ -163,10 +163,10 @@ namespace std {
                 template <class Rep, class Period>
                 void wait_for_change_for(const atomic<T>& object, T val, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
                     __exponential_backoff b;
-                    chrono::milliseconds remains = then - clock::now();
+                    chrono::milliseconds remains = rel_time - clock::now();
                     while (object.load(order) == val && remains > chrono::milliseconds::zero()) {
                         b.sleep();
-                        remains = then - clock::now();
+                        remains = rel_time - clock::now();
                     }
                 }
                 template <class F>
@@ -176,8 +176,9 @@ namespace std {
             };
 
             class __racy_synchronic_base {
-                mutable atomic<int> expect_count = 0, notify_count = 0;
+                mutable atomic<int> expect_count, notify_count;
             public:
+                __racy_synchronic_base() : expect_count(0), notify_count(0) { }
                 decltype(auto) make_wait_guard() const noexcept { return __make_updown_guard(expect_count); }
                 decltype(auto) make_notify_guard() const noexcept { return __make_updown_guard(notify_count); }
                 bool has_wait() const noexcept { return expect_count.load() != 0; }
@@ -197,7 +198,7 @@ namespace std {
                     c.wait(l, [&]() -> bool { return object.load(order) != nval; });
                 }
                 template <class Rep, class Period>
-                void wait_for_change_for(const atomic<T>& object, T val, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
+                void wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
                     auto guard = make_wait_guard();
                     unique_lock<mutex> l(m);
                     c.wait_for(l, [&]() -> bool { return object.load(order) != nval; }, rel_time);
