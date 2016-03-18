@@ -129,7 +129,7 @@ inline namespace concurrency_v2 {
     }
     template <class T>
     struct __synchronic_native {
-        enum { value = is_integral<T>::value && (sizeof(T) <= 4); }
+        static constexpr bool value = is_integral<T>::value && (sizeof(T) == 4);
     };
 
 #endif
@@ -197,8 +197,8 @@ inline namespace concurrency_v2 {
     };
 
     class __racy_synchronic_base {
-        alignas(64) mutable atomic<int> expect_count;
-        alignas(64) mutable atomic<int> notify_count;
+        mutable atomic<int> notify_count;
+        mutable atomic<int> wait_flag;
     public:
         class guard {
             atomic<int>& object;
@@ -215,10 +215,13 @@ inline namespace concurrency_v2 {
             inline guard& operator=(const guard&) = delete;
         };
 
-        inline __racy_synchronic_base() : expect_count(0), notify_count(0) { }
-        inline guard make_wait_guard() const noexcept { return guard(expect_count); }
+        inline __racy_synchronic_base() : notify_count(0), wait_flag(false) { }
         inline guard make_notify_guard() const noexcept { return guard(notify_count); }
-        inline bool has_wait() const noexcept { return expect_count.fetch_add(0,memory_order_acq_rel) != 0; }
+        inline guard make_wait_guard() const noexcept {
+            std::atomic_signal_fence(memory_order_seq_cst);
+            return guard(wait_flag);
+        }
+        inline bool check_wait_flag() const noexcept { return wait_flag.fetch_add(0, memory_order_acq_rel) != 0; }
         inline ~__racy_synchronic_base() {
             __synchronic_spin_for(notify_count, 0, memory_order_acquire);
         }
@@ -232,28 +235,28 @@ inline namespace concurrency_v2 {
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
             if(__timed_synchronic<T>().wait_for_change_for(object, nval, order, chrono::milliseconds(4)))
                 return;
-            auto guard1 = make_wait_guard();
-            auto guard2 = unique_lock<mutex>(m);
-            c.wait(guard2, [&]() -> bool { return object.load(order) != nval; });
+            auto guard = unique_lock<mutex>(m);
+            auto wait_guard = make_wait_guard();
+            c.wait(guard, [&]() -> bool { return object.load(order) != nval; });
         }
         template <class Rep, class Period>
         bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
             if(__timed_synchronic<T>().wait_for_change_for(object, nval, order, chrono::milliseconds(4)))
                 return true;
-            auto guard1 = make_wait_guard();
-            auto guard2 = unique_lock<mutex>(m);
-            return c.wait_for(guard2, [&]() -> bool { return object.load(order) != nval; }, rel_time) == cv_status::no_timeout;
+            auto guard = unique_lock<mutex>(m);
+            auto wait_guard = make_wait_guard();
+            return c.wait_for(guard, [&]() -> bool { return object.load(order) != nval; }, rel_time) == cv_status::no_timeout;
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
             auto guard = make_notify_guard();
             func(object);
-            if (__synchronic_expect(!has_wait(), 1))
+            if (__synchronic_expect(!check_wait_flag(), 1))
                 return;
             {
                 unique_lock<mutex> l(m);
             }
-            if (__synchronic_expect(all, 1))
+            if (all)
                 c.notify_all();
             else
                 c.notify_one();
@@ -266,12 +269,14 @@ inline namespace concurrency_v2 {
     class __direct_futex_synchronic : protected __racy_synchronic_base {
     public:
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
-            auto guard = make_wait_guard();
-            __synchronic_wait(&object, nval);
+            auto wait_guard = make_wait_guard();
+            do {
+                __synchronic_wait(&object, nval);
+            } while(object.load(order) == nval);
         }
         template <class Rep, class Period>
         bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
-            auto guard = make_wait_guard();
+            auto wait_guard = make_wait_guard();
             __synchronic_wait_timed(&object, nval, rel_time);
             return object.load(order) != nval;
         }
@@ -279,9 +284,9 @@ inline namespace concurrency_v2 {
         void notify(atomic<T>& object, F func, bool const all) {
             auto guard = make_notify_guard();
             func(object);
-            if (__synchronic_expect(!has_wait(), 1))
+            if(__synchronic_expect(!check_wait_flag(), true))
                 return;
-            if (__synchronic_expect(all, 1))
+            if (all)
                 __synchronic_wake_all(&object);
             else
                 __synchronic_wake_one(&object);
@@ -298,7 +303,7 @@ inline namespace concurrency_v2 {
                 lastuser.store(me, memory_order_seq_cst);
                 if (object.load(order) != nval)
                     return;
-                __futex_synchronic<int>::wait_for_change(lastuser, me, memory_order_acquire);
+                __direct_futex_synchronic<int>::wait_for_change(lastuser, me, memory_order_acquire);
             }
         }
         template <class Rep, class Period>
@@ -307,14 +312,14 @@ inline namespace concurrency_v2 {
             lastuser.store(me, memory_order_seq_cst);
             if (object.load(order) != nval)
                 return true;
-            __futex_synchronic<int>::wait_for_change_for(lastuser, me, memory_order_acquire, rel_time);
+            __direct_futex_synchronic<int>::wait_for_change_for(lastuser, me, memory_order_acquire, rel_time);
             return object.load(order) != nval;
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
             auto me = ticket.fetch_add(1, memory_order_relaxed);
             func(object);
-            __futex_synchronic<int>::notify(lastuser, [=](atomic<int>& object) { lastuser.store(me, memory_order_release); }, all);
+            __direct_futex_synchronic<int>::notify(lastuser, [=](atomic<int>& object) { lastuser.store(me, memory_order_release); }, all);
         }
     };
 

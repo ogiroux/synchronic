@@ -27,7 +27,7 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #ifdef WIN32
-#define _WIN32_WINNT 0x0601
+#define _WIN32_WINNT 0x0602
 #endif
 
 #include "test.hpp"
@@ -194,6 +194,7 @@ public :
         std::uint64_t it2 = iterations;
         auto end = my_clock::now();
         auto cpu_end = get_cpu_time();
+        std::cout << "Done, canceling threads...\r";
         stop = true;
         while (running != 0) std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -248,17 +249,29 @@ int main(int argc, const char * argv[]) {
 
     std::ostringstream nullstream;
     std::ofstream csv("output.csv");
-    
+    if(!csv) {
+        std::cout << "ERROR: could not open the output file." << std::endl;
+        return 0;
+    }    
+
     csv << "name, threads, steps, time, expected, real/expected, cpu/expected, user/cpu, system/cpu" << std::endl;
     
     std::mt19937 r;
+    std::mutex m1;
+
+//    typedef bartosz_mutex test_mutex;
+    typedef ttas_mutex test_mutex;
+
+    test_mutex m2;
+
+    auto const N = std::thread::hardware_concurrency();
 
     std::cout << "Warming up...\r" << std::flush;
     compute_work_item_cost(r);
     
     std::cout << "Measuring work item cost...\r" << std::flush;
     auto cost = compute_work_item_cost(r);
-    
+   
     auto target_count = int(5E1 / cost);
     std::cout << "Work item cost : " << cost << " ns/iteration, targeting " << target_count << " iterations/step.\n";
     std::cout << std::endl;
@@ -277,18 +290,15 @@ int main(int argc, const char * argv[]) {
         std::cout << std::endl;
     }
     
-    std::mutex m1;
     do_run(csv, "std::mutex uncontended 1-thread", 1, [=,&m1](auto, auto&) mutable {
         { std::unique_lock<std::mutex>(m1); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    ttas_mutex m2;
     do_run(csv, "ttas_mutex uncontended 1-thread", 1, [=,&m2](auto, auto&) mutable {
-        { std::unique_lock<ttas_mutex>(m2); }
+        { std::unique_lock<test_mutex>(m2); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 
-    auto const N = std::thread::hardware_concurrency();
     constexpr int k_limit = 1024;
     if (N > k_limit) {
         std::cout << "ERROR: Cannot continue because there are more than " << k_limit << " hardware threads on this system.\n";
@@ -319,10 +329,10 @@ int main(int argc, const char * argv[]) {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     
-    ttas_mutex m2N[k_limit];
+    test_mutex m2N[k_limit];
     do_run(csv, "ttas_mutex uncontended N-thread", N, [=,&m2N](auto i, auto&) mutable {
         auto& m = m2N[i];
-        { std::unique_lock<ttas_mutex> l(m); }
+        { std::unique_lock<test_mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     
@@ -342,17 +352,17 @@ int main(int argc, const char * argv[]) {
     }, target_count, cost);
     do_run(csv, "ttas_mutex low-p contended N-thread", N, [=, &m2N](auto i, auto& dr) mutable {
         auto& m = m2N[dr() & mask];
-        { std::unique_lock<ttas_mutex> l(m); }
+        { std::unique_lock<test_mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    
+
     auto short_count = int(3E2 / cost);
     do_run(csv, "std::mutex short contended N-thread", N, [=, &m1](auto, auto&) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
     do_run(csv, "ttas_mutex short contended N-thread", N, [=, &m2](auto, auto&) mutable {
-        std::unique_lock<ttas_mutex> l(m2); 
+        std::unique_lock<test_mutex> l(m2); 
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
 
@@ -362,7 +372,7 @@ int main(int argc, const char * argv[]) {
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
     do_run(csv, "ttas_mutex long contended N-thread", N, [=, &m2](auto, auto&) mutable {
-        std::unique_lock<ttas_mutex> l(m2);
+        std::unique_lock<test_mutex> l(m2);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
 

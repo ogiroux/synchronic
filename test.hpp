@@ -83,9 +83,40 @@ private :
 };
 #endif
 
+class bartosz_mutex
+{
+    std::atomic<int> word;
+public:
+    bartosz_mutex() : word(0) { }
+    void lock()
+    {
+        // try to atimically swap 0 -> 1
+        int value1 = 0;
+        if (word.compare_exchange_strong(value1, 1, std::memory_order_acquire, std::memory_order_relaxed))
+            return; // success
+        // wasn't zero -- somebody held the lock
+        do {
+            int value2 = 1;
+            // assume lock is still taken, try to make it 2 and wait
+            if (value1 == 2 || word.compare_exchange_strong(value2, 2, std::memory_order_acquire, std::memory_order_relaxed))
+                // let's wait, but only if the value is still 2
+                std::experimental::__synchronic_wait(&word, 2);    
+            // try (again) assuming the lock is free
+            value1 = 0;
+        } while (!word.compare_exchange_strong(value1, 2, std::memory_order_acquire, std::memory_order_relaxed));
+        // we are here only if transition 0 -> 2 succeeded
+    }
+    void unlock() {
+        if (word.fetch_add(-1, std::memory_order_release) != 1) {
+             word.store(0, std::memory_order_release);
+             std::experimental::__synchronic_wake_one(&word);
+        }
+    }
+};
+
 struct ttas_mutex {
 
-    ttas_mutex() : locked(false) {
+    ttas_mutex() : locked(0) {
     }
 
 	ttas_mutex(const ttas_mutex&) = delete;
@@ -93,20 +124,20 @@ struct ttas_mutex {
 
     void lock() {
         while(1) {
-            bool state = false;
-            if (locked.compare_exchange_weak(state, true, std::memory_order_acquire))
+            int state = 0;
+            if (locked.compare_exchange_weak(state, 1, std::memory_order_acquire))
                 return;
             sync.wait_for_change(locked, state, std::memory_order_relaxed);
         }
     }
 
     void unlock() {
-        sync.notify_one(locked, false, std::memory_order_release);
+        sync.notify_one(locked, 0, std::memory_order_release);
     }
 
 private :
-    std::atomic<bool> locked;
-    std::experimental::synchronic<bool> sync;
+    alignas(64) std::atomic<int> locked;
+    alignas(64) std::experimental::synchronic<int> sync;
 };
 
 struct ticket_mutex {
