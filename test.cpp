@@ -26,7 +26,9 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
+#ifdef WIN32
 #define _WIN32_WINNT 0x0601
+#endif
 
 #include "test.hpp"
 
@@ -35,6 +37,8 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <random>
 #include <chrono>
 #include <iostream>
+#include <sstream>
+#include <fstream>
 #include <iomanip>
 
 
@@ -47,9 +51,14 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
         times(&t); 
         return t; 
     }
-    double cpu_time_consumed(cpu_time start, cpu_time end) {
+    double user_time_consumed(cpu_time start, cpu_time end) {
         auto nanoseconds_per_clock_tick = double(1000000000) / sysconf(_SC_CLK_TCK);
-        auto clock_ticks_elapsed = (end.tms_utime - start.tms_utime) + (end.tms_stime - start.tms_stime);
+        auto clock_ticks_elapsed = end.tms_utime - start.tms_utime;
+        return clock_ticks_elapsed * nanoseconds_per_clock_tick;
+    }
+    double system_time_consumed(cpu_time start, cpu_time end) {
+        auto nanoseconds_per_clock_tick = double(1000000000) / sysconf(_SC_CLK_TCK);
+        auto clock_ticks_elapsed = end.tms_stime - start.tms_stime;
         return clock_ticks_elapsed * nanoseconds_per_clock_tick;
     }
 #endif
@@ -85,7 +94,7 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     }
 #endif
 
-#ifdef _MSC_VER
+#ifdef WIN32
     static HANDLE self = GetCurrentProcess();
     typedef std::pair<FILETIME,FILETIME> cpu_time;
     cpu_time get_cpu_time() {
@@ -102,10 +111,16 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     std::uint64_t make64(FILETIME ftime) {
         return make64(ftime.dwLowDateTime, ftime.dwHighDateTime);
     }
-    double cpu_time_consumed(cpu_time start, cpu_time end) {
+    double user_time_consumed(cpu_time start, cpu_time end) {
 
         double nanoseconds_per_clock_tick = 100; //100-nanosecond intervals
-        auto clock_ticks_elapsed = (make64(end.first) - make64(start.first)) + (make64(end.second) - make64(start.second));
+        auto clock_ticks_elapsed = make64(end.second) - make64(start.second);
+        return clock_ticks_elapsed * nanoseconds_per_clock_tick;
+    }
+    double system_time_consumed(cpu_time start, cpu_time end) {
+        
+        double nanoseconds_per_clock_tick = 100; //100-nanosecond intervals
+        auto clock_ticks_elapsed = make64(end.first) - make64(start.first);
         return clock_ticks_elapsed * nanoseconds_per_clock_tick;
     }
     void set_affinity(std::uint64_t cpu) {
@@ -140,22 +155,27 @@ class run {
 public :
     run() : go(false), stop(false), running(0), iterations(0) { }
     struct report {
-        double wall_time, cpu_time;
+        double wall_time, user_time, system_time;
         std::uint64_t steps;
     };
     template <class F>
     report time(int threads, F f, std::uint64_t target_count) {
-        for (int i = 0; i < threads; ++i)
-            std::thread([&,f, i]() mutable {
+        std::random_device d;
+        for (int i = 0; i < threads; ++i) {
+            auto s = d();
+            std::thread([&,f, i, s]() mutable {
+                std::mt19937 r;
+                r.seed(s);
                 set_affinity(i);
                 running++;
                 while (go != true) std::this_thread::yield();
                 while (stop != true) {
-                    f(i);
+                    f(i, r);
                     iterations.fetch_add(1, std::memory_order_relaxed);
                 }
                 running--;
             }).detach();
+        }
         while (running != threads) std::this_thread::yield();
         go = true;
         auto cpu_start = get_cpu_time();
@@ -164,8 +184,9 @@ public :
         if (threads)
             std::this_thread::sleep_for(std::chrono::seconds(time_target_in_seconds));
         else {
+            std::mt19937 r;
             for (int i = 0; i < target_count; ++i) {
-                f(0);
+                f(0, r);
                 iterations.fetch_add(1, std::memory_order_relaxed);
             }
         }
@@ -178,7 +199,8 @@ public :
 
         report r;
         r.wall_time = double(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
-        r.cpu_time = cpu_time_consumed(cpu_start, cpu_end);
+        r.user_time = user_time_consumed(cpu_start, cpu_end);
+        r.system_time = system_time_consumed(cpu_start, cpu_end);
         r.steps = (it2 - it1);
 
         return r;
@@ -186,30 +208,48 @@ public :
 };
 
 template <class F>
-double do_run(std::string const& what, int threads, F f, int count, double cost)
+double do_run(std::ostream& csv, std::string const& what, int threads, F f, int count, double cost)
 {
+    std::cout << "Measuring " << what << " (" << threads << "T, " << time_target_in_seconds
+              << "s, step = " << count << " x " << cost << " ns)" << std::endl;
+    
     auto expected = count * cost;
-    std::cout << what << " (" << threads << "T, " << time_target_in_seconds << "s, step = " << count << " x " << cost << " ns)" << std::endl;
-    
     auto r = run().time(threads, f, std::uint64_t(time_target_in_seconds * 1E9 / expected));
-    std::cout << "\ttotal progress : " << r.steps << " steps in " << r.wall_time << "ns" << std::endl;
+    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+        "total progress : " << r.steps << " steps in " << r.wall_time << "ns" << std::endl;
     
-    auto time_per_step = r.wall_time / r.steps;
-    std::cout << "\trate : " << time_per_step << " ns/step" << std::endl;
-    std::cout << "\toverhead over " << expected << " ns/step : " << std::endl;
+    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+        "expected : " << expected << " ns/step" << std::endl;
     
-    auto wall_time = time_per_step - expected;
-    std::cout << "\t\t" << std::left << std::setfill(' ') << std::setw(26) << "wall-time = " << wall_time << " ns/step (" << wall_time / expected * 100 << "%)" << std::endl;
+    auto wall_time = r.wall_time / r.steps;
+    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+        "real : " << wall_time << " ns/step (" << wall_time / expected * 100 << "%)" << std::endl;
+
+    auto user_time = r.user_time / r.steps;
+    auto system_time = r.system_time / r.steps;
+    auto cpu_time = user_time + system_time;
+    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+        "cpu : " << cpu_time << " ns/step (" << cpu_time / expected * 100 << "%)" << std::endl;
+    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+        "[user : " << user_time / cpu_time * 100 << "%]" << std::endl;
+    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+        "[system : " << system_time / cpu_time * 100 << "%]" << std::endl;
     
-    auto cpu_time = r.cpu_time / r.steps - expected;
-    std::cout << "\t\t" << std::left << std::setfill(' ') << std::setw(26) << "cpu-time =" << cpu_time << " ns/step (" << cpu_time / expected * 100 << "%)" << std::endl;
     std::cout << std::endl;
     
-    return time_per_step / count;
+    csv << "\"" << what << "\"," << threads << ',' << r.steps << ',' << r.wall_time << ',' << expected << ','
+        << wall_time << ','  << cpu_time << ','  << user_time << ','  << system_time << std::endl;
+    
+    return wall_time / count;
 }
 
 int main(int argc, const char * argv[]) {
 
+    std::ostringstream nullstream;
+    std::ofstream csv("output.csv");
+    
+    csv << "name, threads, steps, time, expected, real, cpu, user, system" << std::endl;
+    
     std::mt19937 r;
 
     std::cout << "Warming up...\r" << std::flush;
@@ -218,32 +258,31 @@ int main(int argc, const char * argv[]) {
     std::cout << "Measuring work item cost...\r" << std::flush;
     auto cost = compute_work_item_cost(r);
     
-    auto target_count = 10;//std::uint64_t(5E1 / cost);
+    auto target_count = std::uint64_t(5E1 / cost);
     std::cout << "Work item cost : " << cost << " ns/iteration, targeting " << target_count << " iterations/step.\n";
     std::cout << std::endl;
 
-    auto trial_1 = do_run("Control #1 run for 1-thread", 1, [=](auto) mutable {
+    auto trial_1 = do_run(nullstream, "Control #1 run for 1-thread", 1, [=](auto, auto&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     
-    auto cost_1 = (std::min)(trial_1,do_run("Control #2 run for 1-thread", 1, [=](auto) mutable {
+    auto trial_2 = do_run(nullstream, "Control #2 run for 1-thread", 1, [=](auto, auto&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count, cost));
+    }, target_count, cost);
 
-    if(cost_1 < cost) {
-        cost = cost_1;
-        target_count = 10;//std::uint64_t(5E1 / cost);
-        std::cout << "Adjusting cost to " << cost << " ns/iteration, and retargeting to " << target_count << " iterations/step.\n";
+    if((std::min)(trial_1, trial_2) < cost) {
+        cost = (std::min)(trial_1, trial_2);
+        std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
         std::cout << std::endl;
     }
     
     std::mutex m1;
-    do_run("Measuring std::mutex uncontended 1-thread", 1, [=,&m1](auto) mutable {
+    do_run(csv, "std::mutex uncontended 1-thread", 1, [=,&m1](auto, auto&) mutable {
         { std::unique_lock<std::mutex>(m1); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     ttas_mutex m2;
-    do_run("Measuring ttas_mutex uncontended 1-thread", 1, [=,&m2](auto) mutable {
+    do_run(csv, "ttas_mutex uncontended 1-thread", 1, [=,&m2](auto, auto&) mutable {
         { std::unique_lock<ttas_mutex>(m2); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
@@ -255,70 +294,73 @@ int main(int argc, const char * argv[]) {
         std::cout << "ERROR: This is an arbitrary limit. Feel free to raise it, recompile and rerun.\n";
     }
 
-    auto trial_n = do_run("Control #1 for N-thread", N, [=](auto i) mutable {
+    auto trial_n1 = do_run(nullstream, "Control #1 for N-thread", N, [=](auto i, auto&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     
-    auto cost_n = (std::min)(trial_n,do_run("Control #2 for N-thread", N, [=](auto i) mutable {
+    auto trial_n2 = do_run(nullstream, "Control #2 for N-thread", N, [=](auto i, auto&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count, cost));
+    }, target_count, cost);
     
-    if(cost_n < cost) {
-        cost = cost_n;
-        target_count = 10;//std::uint64_t(5E1 / cost);
+    if((std::min)(trial_n1, trial_n2) < cost) {
+        cost = (std::min)(trial_n1, trial_n2);
         std::cout << "NOTE: Based purely on these numbers, your system appears to have hyper-threads enabled.\n";
         std::cout << "NOTE: Will use the N-thread control cost as the base cost.\n";
         std::cout << std::endl;
-        std::cout << "Adjusting cost to " << cost << " ns/iteration, and retargeting to " << target_count << " iterations/step.\n";
+        std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
         std::cout << std::endl;
     }
     
     std::mutex m1N[k_limit];
-    do_run("Measuring std::mutex uncontended N-thread", N, [=,&m1N](auto i) mutable {
+    do_run(csv, "std::mutex uncontended N-thread", N, [=,&m1N](auto i, auto&) mutable {
         auto& m = m1N[i];
         { std::unique_lock<std::mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     
     ttas_mutex m2N[k_limit];
-    do_run("Measuring ttas_mutex uncontended N-thread", N, [=,&m2N](auto i) mutable {
+    do_run(csv, "ttas_mutex uncontended N-thread", N, [=,&m2N](auto i, auto&) mutable {
         auto& m = m2N[i];
         { std::unique_lock<ttas_mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     
-    /*
-     This is probably fully contended because they all have copies of the same mt13997.
-     
+    
+    {
+        std::random_device d;
+        if(d.entropy() == 0)
+            std::cout << "NOTE: the system randomness source claims to have no entropy, probabilistic tests may not operate correctly." << std::endl;
+        std::cout << std::endl;
+    }
+    
     auto mask = ~(~0 << std::ilogb(N));
-    do_run("Measuring std::mutex low-p contended N-thread", N, [=,&m1N](auto i) mutable {
-        auto& m = m1N[r() & mask];
+    do_run(csv, "std::mutex low-p contended N-thread", N, [=,&m1N](auto i, auto& dr) mutable {
+        auto& m = m1N[dr() & mask];
         { std::unique_lock<std::mutex> l(m); }
-        for (int i = 0; i < target_count-1; ++i) r.discard(1);
+        for (int j = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    do_run("Measuring ttas_mutex low-p contended N-thread", N, [=, &m2N](auto i) mutable {
-        auto& m = m2N[r() & mask];
+    do_run(csv, "ttas_mutex low-p contended N-thread", N, [=, &m2N](auto i, auto& dr) mutable {
+        auto& m = m2N[dr() & mask];
         { std::unique_lock<ttas_mutex> l(m); }
-        for (int i = 0; i < target_count-1; ++i) r.discard(1);
+        for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    */
     
     auto short_count = int(3E2 / cost);
-    do_run("Measuring std::mutex short contended N-thread", N, [=, &m1](auto) mutable {
+    do_run(csv, "std::mutex short contended N-thread", N, [=, &m1](auto, auto&) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
-    do_run("Measuring ttas_mutex short contended N-thread", N, [=, &m2](auto) mutable {
+    do_run(csv, "ttas_mutex short contended N-thread", N, [=, &m2](auto, auto&) mutable {
         std::unique_lock<ttas_mutex> l(m2); 
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
 
     auto long_count = int(1E7 / cost);
-    do_run("Measuring std::mutex long contended N-thread", N, [=, &m1](auto) mutable {
+    do_run(csv, "std::mutex long contended N-thread", N, [=, &m1](auto, auto&) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
-    do_run("Measuring ttas_mutex long contended N-thread", N, [=, &m2](auto) mutable {
+    do_run(csv, "ttas_mutex long contended N-thread", N, [=, &m2](auto, auto&) mutable {
         std::unique_lock<ttas_mutex> l(m2);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);

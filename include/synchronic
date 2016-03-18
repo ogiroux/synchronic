@@ -32,48 +32,74 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <atomic>
 #include <chrono>
 #include <thread>
-#include <functional>
-#include <algorithm>
 #include <mutex>
 #include <condition_variable>
 
-//the default yield function used inside the implementation is the Standard one
+#ifdef WIN32
+#include <windows.h>
+#endif //WIN32
+
 #ifdef __linux__
-    #define __synchronic_yield sched_yield
+#include <time.h>
+#include <unistd.h>
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <climits>
+#endif //__linux__
+
+namespace std {
+namespace experimental {
+inline namespace concurrency_v2 {
+
+#ifdef __linux__
+    static inline void __synchronic_yield() { sched_yield(); }
 #else
-    #define __synchronic_yield this_thread::yield
+    static inline void __synchronic_yield() { this_thread::yield(); }
+#endif
+
+#if defined(WIN32) && (defined(_M_X64) || defined(_M_IX86))
+    static inline void __synchronic_relax() { _mm_pause(); }
+#elif defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+    static inline void __synchronic_relax() { asm volatile("rep; nop" ::: "memory"); }
+#else
+    static inline void __synchronic_relax() { __synchronic_yield(); }
 #endif
 
 #if defined(_MSC_VER)
-    #define __builtin_expect(condition,common) condition
-    #define __synchronic_relax _mm_pause
-#elif defined(__linux__)
-    static inline void __synchronic_relax() { asm volatile("rep; nop" ::: "memory"); }
+    static inline constexpr bool __synchronic_expect(bool condition, int common) { return condition; }
 #else
-    #define __synchronic_relax __synchronic_yield
+    #define __synchronic_expect __builtin_expect
 #endif
 
-#if defined(_WIN32_WINNT) && _WIN32_WINNT >= 0x0602
-    #include <Windows.h>
-    #define __synchronic_wait(x,v) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),-1)
-    #define __synchronic_wait_timed(x,v,t) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),chrono::duration_cast<chrono::milliseconds>(t).count())
-    #define __synchronic_wake_one(x) WakeByAddressSingle((PVOID)x)
-    #define __synchronic_wake_all(x) WakeByAddressAll((PVOID)x)
-    #define __synchronic_wait_volatile(x,v) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),-1)
-    #define __synchronic_wait_timed_volatile(x,v,t) WaitOnAddress((PVOID)x,(PVOID)&v,sizeof(v),chrono::duration_cast<chrono::milliseconds>(t).count())
-    #define __synchronic_wake_one_volatile(x) WakeByAddressSingle((PVOID)x)
-    #define __synchronic_wake_all_volatile(x) WakeByAddressAll((PVOID)x)
-    #define __SYNCHRONIC_HAS_FUTEX(x) (is_pod<x>::value && (sizeof(x) <= 8))
+#if defined(WIN32) && _WIN32_WINNT >= 0x0602
+
+    template <class P, class V>
+    static inline void __synchronic_wait(P p, V v) {
+        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),-1);
+    }
+    template <class P, class V, class T>
+    static inline void __synchronic_wait_timed(P p,V v,T t) {
+        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),chrono::duration_cast<chrono::milliseconds>(t).count());
+    }
+    template <class P>
+    static inline void __synchronic_wake_one(P p) {
+        WakeByAddressSingle((PVOID)p);
+    }
+    template <class P>
+    static inline void __synchronic_wake_all(P p) {
+        WakeByAddressAll((PVOID)p);
+    }
+    template <class T>
+    struct __synchronic_native {
+        enum { value = is_pod<T>::value && (sizeof(T) <= 8); }
+
+    };
 #endif
 
 #ifdef __linux__
-    #include <time.h>
-    #include <unistd.h>
-    #include <linux/futex.h>
-    #include <sys/syscall.h>
-    #include <climits>
+
     template < class Rep, class Period>
-    static inline timespec to_timespec(std::chrono::duration<Rep, Period> const& delta) {
+    static inline timespec __synchronic_to_timespec(std::chrono::duration<Rep, Period> const& delta) {
         struct timespec ts;
         ts.tv_sec = static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(delta).count());
         ts.tv_nsec = static_cast<long>(std::chrono::duration_cast<std::chrono::nanoseconds>(delta).count());
@@ -85,284 +111,300 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
     static inline long futex(void const* addr1, int op, int val1, struct timespec timeout) {
         return syscall(SYS_futex, addr1, op, val1, &timeout, 0, 0);
     }
-    #define __synchronic_wait(x,v) futex(x, FUTEX_WAIT_PRIVATE, v)
-    #define __synchronic_wait_timed(x,v,t) futex(x, FUTEX_WAIT_PRIVATE, v, to_timespec(t))
-    #define __synchronic_wake_one(x) futex(x, FUTEX_WAKE_PRIVATE, 1)
-    #define __synchronic_wake_all(x) futex(x, FUTEX_WAKE_PRIVATE, INT_MAX)
-    #define __synchronic_wait_volatile(x,v) futex(x, FUTEX_WAIT, v)
-    #define __synchronic_wait_volatile_timed(x,v,t) futex(x, FUTEX_WAIT, v, to_timespec(t))
-    #define __synchronic_wake_one_volatile(x) futex(x, FUTEX_WAKE, 1)
-    #define __synchronic_wake_all_volatile(x) futex(x, FUTEX_WAKE, INT_MAX)
-    #define __SYNCHRONIC_HAS_FUTEX(x) (is_integral<x>::value && (sizeof(x) <= 4))
+    template <class P, class V>
+    void __synchronic_wait(P p, V v) {
+        futex(p, FUTEX_WAIT_PRIVATE, v);
+    }
+    template <class P, class V, class T>
+    void __synchronic_wait_timed(P p,V v,T t) {
+        futex(p, FUTEX_WAIT_PRIVATE, v, __synchronic_to_timespec(t));
+    }
+    template <class P>
+    void __synchronic_wake_one(P p) {
+        futex(p, FUTEX_WAKE_PRIVATE, 1);
+    }
+    template <class P>
+    void __synchronic_wake_all(P p) {
+        futex(p, FUTEX_WAKE_PRIVATE, INT_MAX);
+    }
+    template <class T>
+    struct __synchronic_native {
+        enum { value = is_integral<T>::value && (sizeof(T) <= 4); }
+    };
+
 #endif
 
-namespace std {
-    namespace experimental {
-        inline namespace concurrency_v2 {
+    static constexpr int __magic_number = 42;
 
-            static constexpr int __magic_number = 42;
+    template <class T>
+    class __synchronic_updown_guard {
+        atomic<int>& object;
+    public:
+        __synchronic_updown_guard(atomic<T>& object) noexcept : object(object) { object.fetch_add( 1, memory_order_acquire); }
+        ~__synchronic_updown_guard()                                           { object.fetch_add(-1, memory_order_release); }
+        __synchronic_updown_guard(__synchronic_updown_guard&&) = default;
+        __synchronic_updown_guard& operator=(__synchronic_updown_guard&&) = default;
+        __synchronic_updown_guard(const __synchronic_updown_guard&) = delete;
+        __synchronic_updown_guard& operator=(const __synchronic_updown_guard&) = delete;
+    };
+    template <class T>
+    __synchronic_updown_guard<T> __synchronic_make_updown_guard(atomic<T>& object) noexcept { return __synchronic_updown_guard<T>(object); }
 
-            template <class T>
-            class __updown_guard {
-                atomic<int>& object;
-            public:
-                __updown_guard(atomic<T>& object) noexcept : object(object) { object.fetch_add( 1, memory_order_acquire); }
-                ~__updown_guard()                                           { object.fetch_add(-1, memory_order_release); }
-                __updown_guard(__updown_guard&&) = default;
-                __updown_guard& operator=(__updown_guard&&) = default;
-                __updown_guard(const __updown_guard&) = delete;
-                __updown_guard& operator=(const __updown_guard&) = delete;
-            };
-            template <class T>
-            __updown_guard<T> __make_updown_guard(atomic<T>& object) noexcept { return __updown_guard<T>(object); }
-
-            template <class F>
-            bool __spin_for_condition(F func, int attempts) noexcept {
-                int i = 0;
-                for (; (attempts < 0 || i < attempts) && i < __magic_number; __synchronic_relax(), ++i)
-                    if (__builtin_expect(func(), 1))
-                        return true;
-                for (; (attempts < 0 || i < attempts); __synchronic_yield(), ++i)
-                    if (__builtin_expect(func(), 1))
-                        return true;
-                return false;
-            }
-            template <class T>
-            bool __spin_for_change(const atomic<T>& arg, T nval, memory_order order, int attempts = -1) noexcept {
-                return __spin_for_condition([=, &arg]() { return arg.load(order) != nval; }, attempts);
-            }
-            template <class T>
-            bool __spin_for(const atomic<T>& arg, T val, memory_order order, int attempts = -1) noexcept {
-                return __spin_for_condition([=, &arg]() { return arg.load(order) == val; }, attempts);
-            }
-
-            class __exponential_backoff {
-                int microseconds = 8;
-            public:
-                void sleep() {
-                    if (__builtin_expect(microseconds > 75, 0))
-                        this_thread::sleep_for(chrono::microseconds(microseconds));
-                    else if (__builtin_expect(microseconds > 25, 0))
-                        __synchronic_yield();
-                    else
-                        __synchronic_relax();
-                    microseconds = (min)(microseconds + (microseconds >> 2), 1024);
-                }
-            };
-
-            template <class T>
-            class __timed_synchronic {
-                using clock = conditional<chrono::high_resolution_clock::is_steady, 
-                                          chrono::high_resolution_clock, chrono::steady_clock>::type;
-            public:
-                void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
-                    __exponential_backoff b;
-                    while (object.load(order) == nval)
-                        b.sleep();
-                }
-                template <class Rep, class Period>
-                void wait_for_change_for(const atomic<T>& object, T val, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
-                    __exponential_backoff b;
-                    chrono::milliseconds remains = rel_time - clock::now();
-                    while (object.load(order) == val && remains > chrono::milliseconds::zero()) {
-                        b.sleep();
-                        remains = rel_time - clock::now();
-                    }
-                }
-                template <class F>
-                void notify(atomic<T>& object, F func, bool const) {
-                    func(object);
-                }
-            };
-
-            class __racy_synchronic_base {
-                mutable atomic<int> expect_count, notify_count;
-            public:
-                __racy_synchronic_base() : expect_count(0), notify_count(0) { }
-                decltype(auto) make_wait_guard() const noexcept { return __make_updown_guard(expect_count); }
-                decltype(auto) make_notify_guard() const noexcept { return __make_updown_guard(notify_count); }
-                bool has_wait() const noexcept { return expect_count.load() != 0; }
-                ~__racy_synchronic_base() {
-                    __spin_for(notify_count, 0, memory_order_acquire);
-                }
-            };
-
-            template <class T>
-            class __condition_synchronic : protected __racy_synchronic_base {
-                mutable mutex m;
-                mutable condition_variable c;
-            public:
-                void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
-                    auto guard = make_wait_guard();
-                    unique_lock<mutex> l(m);
-                    c.wait(l, [&]() -> bool { return object.load(order) != nval; });
-                }
-                template <class Rep, class Period>
-                void wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
-                    auto guard = make_wait_guard();
-                    unique_lock<mutex> l(m);
-                    c.wait_for(l, [&]() -> bool { return object.load(order) != nval; }, rel_time);
-                }
-                template <class F>
-                void notify(atomic<T>& object, F func, bool const all) {
-                    auto guard = make_notify_guard();
-                    func(object);
-                    if (!__builtin_expect(has_wait(), 0))
-                        return;
-                    {
-                        unique_lock<mutex> l(m);
-                    }
-                    if (__builtin_expect(all, 1))
-                        c.notify_all();
-                    else
-                        c.notify_one();
-                }
-            };
-
-#ifdef __SYNCHRONIC_HAS_FUTEX
-            template <class T>
-            class __futex_synchronic : protected __racy_synchronic_base {
-            public:
-                void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
-                    auto guard = make_wait_guard();
-                    __synchronic_wait(&object, nval);
-                }
-                template <class Rep, class Period>
-                void wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
-                    auto guard = make_wait_guard();
-                    __synchronic_wait_timed(&object, nval, rel_time);
-                }
-                template <class F>
-                void notify(atomic<T>& object, F func, bool const all) {
-                    auto guard = make_notify_guard();
-                    func(object);
-                    if (!__builtin_expect(has_wait(), 0))
-                        return;
-                    if (__builtin_expect(all, 1))
-                        __synchronic_wake_all(&object);
-                    else
-                        __synchronic_wake_one(&object);
-                }
-            };
-            template <class T>
-            class __indirect_futex_synchronic : protected __futex_synchronic<int> {
-                mutable atomic<int> ticket, lastuser;
-            public:
-                __indirect_futex_synchronic() : ticket(0), lastuser(0) { }
-                void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
-                    auto me = ticket.fetch_add(1, memory_order_relaxed);
-                    while (1) {
-                        lastuser.store(me, memory_order_seq_cst);
-                        if (object.load(order) != nval)
-                            return;
-                        __futex_synchronic<int>::wait_for_change(lastuser, me, memory_order_acquire);
-                    }
-                }
-                template <class Rep, class Period>
-                void wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
-                    auto me = ticket.fetch_add(1, memory_order_relaxed);
-                    lastuser.store(me, memory_order_seq_cst);
-                    if (object.load(order) != nval)
-                        return;
-                    __futex_synchronic<int>::wait_for_change_for(lastuser, me, memory_order_acquire, rel_time);
-                }
-                template <class F>
-                void notify(atomic<T>& object, F func, bool const all) {
-                    auto me = ticket.fetch_add(1, memory_order_relaxed);
-                    func(object);
-                    __futex_synchronic<int>::notify(lastuser, [=](atomic<int>& object) { lastuser.store(me, memory_order_release); }, all);
-                }
-            }; 
-#endif //__SYNCHRONIC_HAS_FUTEX
-
-            template <class T, class Enable = void>
-#if defined(__SYNCHRONIC_HAS_FUTEX)
-            using __base_synchronic = __indirect_futex_synchronic<T>;
-#elif defined(__APPLE__)
-            using __base_synchronic = __condition_synchronic<T>;
-#else
-            using __base_synchronic = __timed_synchronic<T>;
-#endif //__APPLE__
-
-            template <class T, class Enable = void>
-            struct __synchronic_base : protected __base_synchronic<T> {
-            };
-
-#ifdef __SYNCHRONIC_HAS_FUTEX
-            template <class T>
-            struct __synchronic_base<T, typename enable_if<__SYNCHRONIC_HAS_FUTEX(T)>::type> : protected __futex_synchronic<T> {
-            };
-#endif //__SYNCHRONIC_HAS_FUTEX
-
-            // 29.9, synchronic operations
-
-            enum class wait_hint {
-                optimize_latency,
-                optimize_utilization
-            };
-
-            static constexpr int __wait_attempts(wait_hint hint) {
-                return hint == wait_hint::optimize_latency ? __magic_number << 1 : __magic_number >> 1;
-            }
-
-            template <class T>
-            class synchronic : protected __synchronic_base<T> {
-            public:
-                synchronic() = default;
-                ~synchronic() = default;
-                synchronic(const synchronic&) = delete;
-                synchronic& operator=(const synchronic&) = delete;
-                synchronic(synchronic&&) = delete;
-                synchronic& operator=(synchronic&&) = delete;
-
-                void wait(const atomic<T>& object, T desired, 
-                  memory_order order = memory_order_seq_cst, 
-                  wait_hint hint = wait_hint::optimize_latency) const {
-                    if (__builtin_expect(!__spin_for(object, desired, order, __wait_attempts(hint)), 0))
-                        for (auto t = object.load(order); t != desired; t = object.load(order))
-                            wait_for_change(object, t, memory_order_relaxed, hint);
-                }
-                void wait_for_change(const atomic<T>& object, T current, 
-                  memory_order order = memory_order_seq_cst, 
-                  wait_hint hint = wait_hint::optimize_latency) const {
-                    if (__builtin_expect(!__spin_for_change(object, current, order, __wait_attempts(hint)), 0))
-                        __synchronic_base<T>::wait_for_change(object, current, order);
-                }
-
-                template <class Clock, class Duration>
-                bool wait_for_change_until(const atomic<T>& object, T current, 
-                  chrono::time_point<Clock, Duration> const& abs_time, 
-                  memory_order order = memory_order_seq_cst, 
-                  wait_hint hint = wait_hint::optimize_latency) const {
-                    wait_for_change_for(object, current, abs_time - chrono::steady_clock::now(), hint);
-                }
-                template <class Rep, class Period>
-                bool wait_for_change_for(const atomic<T>& object, T current, 
-                  chrono::duration<Rep, Period> const& rel_time, 
-                  memory_order order = memory_order_seq_cst, 
-                  wait_hint hint = wait_hint::optimize_latency) const {
-                    if (__builtin_expect(!__spin_for_change(object, current, order, __wait_attempts(hint)), 0))
-                        __synchronic_base<T>::wait_for_change_for(object, current, order, rel_time);
-                }
-
-                void notify_all(atomic<T>& object, T value, 
-                  memory_order order = memory_order_seq_cst) {
-                    __synchronic_base<T>::notify(object, [=, &object](atomic<T>& object) { object.store(value, order); }, true);
-                }
-                template <class F> void notify_all(atomic<T>& object, F func) {
-                    __synchronic_base<T>::notify(object, func, true);
-                }
-
-                void notify_one(atomic<T>& object, T value, 
-                  memory_order order = memory_order_seq_cst) {
-                    __synchronic_base<T>::notify(object, [=,&object](atomic<T>& object) { object.store(value, order); }, false);
-                }
-                template <class F> void notify_one(atomic<T>& object, F func) {
-                    __synchronic_base<T>::notify(object, func, false);
-                }
-            };
-        }
+    template <class F>
+    bool __synchronic_spin_for_condition(F func, int attempts) noexcept {
+        int i = 0;
+        for (; (attempts < 0 || i < attempts) && i < __magic_number; __synchronic_relax(), ++i)
+            if (__builtin_expect(func(), 1))
+                return true;
+        for (; (attempts < 0 || i < attempts); __synchronic_yield(), ++i)
+            if (func())
+                return true;
+        return false;
     }
-}
+    template <class T>
+    bool __synchronic_spin_for_change(const atomic<T>& arg, T nval, memory_order order, int attempts = -1) noexcept {
+        return __synchronic_spin_for_condition([=, &arg]() { return arg.load(order) != nval; }, attempts);
+    }
+    template <class T>
+    bool __synchronic_spin_for(const atomic<T>& arg, T val, memory_order order, int attempts = -1) noexcept {
+        return __synchronic_spin_for_condition([=, &arg]() { return arg.load(order) == val; }, attempts);
+    }
+
+    class __synchronic_exponential_backoff {
+        int microseconds = 2;
+    public:
+        void sleep() {
+            if (__synchronic_expect(microseconds < 10, 1))
+                __synchronic_yield();
+            else
+                this_thread::sleep_for(chrono::microseconds(microseconds));
+            auto next_microseconds = microseconds + (microseconds >> 2);
+            microseconds = next_microseconds < 2048 ? next_microseconds : 2048;
+        }
+    };
+
+    template <class T>
+    class __timed_synchronic {
+        using clock = conditional<chrono::high_resolution_clock::is_steady, 
+                                  chrono::high_resolution_clock, chrono::steady_clock>::type;
+    public:
+        void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
+            __synchronic_exponential_backoff b;
+            while (object.load(order) == nval)
+                b.sleep();
+        }
+        template <class Rep, class Period>
+        bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
+            __synchronic_exponential_backoff b;
+            auto end = clock::now() + rel_time;
+            do {
+                b.sleep();
+                if(object.load(order) != nval)
+                    return true;
+            } while(clock::now() < end);
+            return false;
+        }
+        template <class F>
+        void notify(atomic<T>& object, F func, bool const) {
+            func(object);
+        }
+    };
+
+    class __racy_synchronic_base {
+        mutable atomic<int> expect_count, notify_count;
+    public:
+        __racy_synchronic_base() : expect_count(0), notify_count(0) { }
+        decltype(auto) make_wait_guard() const noexcept { return __synchronic_make_updown_guard(expect_count); }
+        decltype(auto) make_notify_guard() const noexcept { return __synchronic_make_updown_guard(notify_count); }
+        bool has_wait() const noexcept { return expect_count.load() != 0; }
+        ~__racy_synchronic_base() {
+            __synchronic_spin_for(notify_count, 0, memory_order_acquire);
+        }
+    };
+
+    template <class T>
+    class __condition_synchronic : protected __racy_synchronic_base {
+        mutable mutex m;
+        mutable condition_variable c;
+    public:
+        void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
+            if(__timed_synchronic<T>().wait_for_change_for(object, nval, order, chrono::milliseconds(4)))
+                return;
+            auto guard1 = make_wait_guard();
+            auto guard2 = unique_lock<mutex>(m);
+            c.wait(guard2, [&]() -> bool { return object.load(order) != nval; });
+        }
+        template <class Rep, class Period>
+        bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
+            if(__timed_synchronic<T>().wait_for_change_for(object, nval, order, chrono::milliseconds(4)))
+                return true;
+            auto guard1 = make_wait_guard();
+            auto guard2 = unique_lock<mutex>(m);
+            return c.wait_for(guard2, [&]() -> bool { return object.load(order) != nval; }, rel_time) == cv_status::no_timeout;
+        }
+        template <class F>
+        void notify(atomic<T>& object, F func, bool const all) {
+            auto guard = make_notify_guard();
+            func(object);
+            if (__builtin_expect(!has_wait(), 1))
+                return;
+            {
+                unique_lock<mutex> l(m);
+            }
+            if (__builtin_expect(all, 1))
+                c.notify_all();
+            else
+                c.notify_one();
+        }
+    };
+
+#if defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
+
+    template <class T>
+    class __direct_futex_synchronic : protected __racy_synchronic_base {
+    public:
+        void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
+            auto guard = make_wait_guard();
+            __synchronic_wait(&object, nval);
+        }
+        template <class Rep, class Period>
+        bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
+            auto guard = make_wait_guard();
+            __synchronic_wait_timed(&object, nval, rel_time);
+            return object.load(order) != nval;
+        }
+        template <class F>
+        void notify(atomic<T>& object, F func, bool const all) {
+            auto guard = make_notify_guard();
+            func(object);
+            if (__builtin_expect(!has_wait(), 1))
+                return;
+            if (__builtin_expect(all, 1))
+                __synchronic_wake_all(&object);
+            else
+                __synchronic_wake_one(&object);
+        }
+    };
+    template <class T>
+    class __indirect_futex_synchronic : protected __direct_futex_synchronic<int> {
+        mutable atomic<int> ticket, lastuser;
+    public:
+        __indirect_futex_synchronic() : ticket(0), lastuser(0) { }
+        void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
+            auto me = ticket.fetch_add(1, memory_order_relaxed);
+            while (1) {
+                lastuser.store(me, memory_order_seq_cst);
+                if (object.load(order) != nval)
+                    return;
+                __futex_synchronic<int>::wait_for_change(lastuser, me, memory_order_acquire);
+            }
+        }
+        template <class Rep, class Period>
+        bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
+            auto me = ticket.fetch_add(1, memory_order_relaxed);
+            lastuser.store(me, memory_order_seq_cst);
+            if (object.load(order) != nval)
+                return true;
+            __futex_synchronic<int>::wait_for_change_for(lastuser, me, memory_order_acquire, rel_time);
+            return object.load(order) != nval;
+        }
+        template <class F>
+        void notify(atomic<T>& object, F func, bool const all) {
+            auto me = ticket.fetch_add(1, memory_order_relaxed);
+            func(object);
+            __futex_synchronic<int>::notify(lastuser, [=](atomic<int>& object) { lastuser.store(me, memory_order_release); }, all);
+        }
+    };
+
+    template <class T, class Enable = void>
+    struct __synchronic_base : protected __indirect_futex_synchronic<T> {
+    };
+
+    template <class T>
+    struct __synchronic_base<T, typename enable_if<__synchronic_native<T>::value>::type> : protected __direct_futex_synchronic<T> {
+    };
+
+#else
+
+    template <class T>
+//    using __synchronic_base = __timed_synchronic<T>;
+    using __synchronic_base = __condition_synchronic<T>;
+
+#endif
+
+    // 29.9, synchronic operations
+
+    enum class wait_hint {
+        optimize_latency,
+        optimize_utilization
+    };
+
+    static constexpr int __synchronic_spin_attempts(wait_hint hint) {
+        return hint == wait_hint::optimize_latency ? __magic_number << 1 : __magic_number >> 1;
+    }
+
+    template <class T>
+    class synchronic : protected __synchronic_base<T> {
+        typedef __synchronic_base<T> base;
+    public:
+        synchronic() = default;
+        ~synchronic() = default;
+        synchronic(const synchronic&) = delete;
+        synchronic& operator=(const synchronic&) = delete;
+        synchronic(synchronic&&) = delete;
+        synchronic& operator=(synchronic&&) = delete;
+
+        void wait(const atomic<T>& object, T desired, 
+          memory_order order = memory_order_seq_cst, 
+          wait_hint hint = wait_hint::optimize_latency) const {
+            if (__builtin_expect(__synchronic_spin_for(object, desired, order, __synchronic_spin_attempts(hint)), 1))
+                return;
+            for (auto t = object.load(order); t != desired; t = object.load(order))
+                wait_for_change(object, t, memory_order_relaxed, hint);
+        }
+        void wait_for_change(const atomic<T>& object, T current, 
+          memory_order order = memory_order_seq_cst, 
+          wait_hint hint = wait_hint::optimize_latency) const {
+            if (__builtin_expect(__synchronic_spin_for_change(object, current, order, __synchronic_spin_attempts(hint)), 1))
+                return;
+            base::wait_for_change(object, current, order);
+        }
+
+        template <class Clock, class Duration>
+        bool wait_for_change_until(const atomic<T>& object, T current, 
+          chrono::time_point<Clock, Duration> const& abs_time, 
+          memory_order order = memory_order_seq_cst, 
+          wait_hint hint = wait_hint::optimize_latency) const {
+            return wait_for_change_for(object, current, abs_time - chrono::steady_clock::now(), hint);
+        }
+        template <class Rep, class Period>
+        bool wait_for_change_for(const atomic<T>& object, T current, 
+          chrono::duration<Rep, Period> const& rel_time, 
+          memory_order order = memory_order_seq_cst, 
+          wait_hint hint = wait_hint::optimize_latency) const {
+            if (__builtin_expect(__synchronic_spin_for_change(object, current, order, __synchronic_spin_attempts(hint)), 1))
+                return true;
+            return base::wait_for_change_for(object, current, order, rel_time);
+        }
+
+        void notify_all(atomic<T>& object, T value, 
+          memory_order order = memory_order_seq_cst) {
+            base::notify(object, [=, &object](atomic<T>& object) { object.store(value, order); }, true);
+        }
+        template <class F> void notify_all(atomic<T>& object, F func) {
+            base::notify(object, func, true);
+        }
+
+        void notify_one(atomic<T>& object, T value, 
+          memory_order order = memory_order_seq_cst) {
+            base::notify(object, [=,&object](atomic<T>& object) { object.store(value, order); }, false);
+        }
+        template <class F> void notify_one(atomic<T>& object, F func) {
+            base::notify(object, func, false);
+        }
+    };
+} //namespace concurrency_v2
+} //namespace experimental
+} //namespace std
 
 #endif //__SYNCHRONIC
