@@ -83,6 +83,8 @@ private :
 };
 #endif
 
+#if defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
+
 class bartosz_mutex
 {
     std::atomic<int> word;
@@ -113,6 +115,8 @@ public:
         }
     }
 };
+
+#endif
 
 struct ttas_mutex {
 

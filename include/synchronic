@@ -200,14 +200,15 @@ inline namespace concurrency_v2 {
         mutable atomic<int> notify_count;
         mutable atomic<int> wait_flag;
     public:
+        template <bool relaxed>
         class guard {
             atomic<int>& object;
         public:
             inline guard(atomic<int>& object) noexcept : object(object) {
-                object.fetch_add(1, memory_order_acquire);
+                object.fetch_add(1, relaxed ? memory_order_relaxed : memory_order_acquire);
             }
             inline ~guard() {
-                object.fetch_add(-1, memory_order_release);
+                object.fetch_add(-1, relaxed ? memory_order_relaxed : memory_order_release);
             }
             inline guard(guard&&) = default;
             inline guard& operator=(guard&&) = default;
@@ -216,10 +217,13 @@ inline namespace concurrency_v2 {
         };
 
         inline __racy_synchronic_base() : notify_count(0), wait_flag(false) { }
-        inline guard make_notify_guard() const noexcept { return guard(notify_count); }
-        inline guard make_wait_guard() const noexcept {
+        inline guard<false> make_notify_guard() const noexcept { return guard<false>(notify_count); }
+        inline guard<false> make_wait_guard() const noexcept {
             std::atomic_signal_fence(memory_order_seq_cst);
-            return guard(wait_flag);
+            return guard<false>(wait_flag);
+        }
+        inline guard<true> make_relaxed_wait_guard() const noexcept {
+            return guard<true>(wait_flag);
         }
         inline bool check_wait_flag() const noexcept { return wait_flag.fetch_add(0, memory_order_acq_rel) != 0; }
         inline ~__racy_synchronic_base() {
@@ -236,7 +240,7 @@ inline namespace concurrency_v2 {
             if(__timed_synchronic<T>().wait_for_change_for(object, nval, order, chrono::milliseconds(4)))
                 return;
             auto guard = unique_lock<mutex>(m);
-            auto wait_guard = make_wait_guard();
+            auto wait_guard = make_relaxed_wait_guard();
             c.wait(guard, [&]() -> bool { return object.load(order) != nval; });
         }
         template <class Rep, class Period>
@@ -244,7 +248,7 @@ inline namespace concurrency_v2 {
             if(__timed_synchronic<T>().wait_for_change_for(object, nval, order, chrono::milliseconds(4)))
                 return true;
             auto guard = unique_lock<mutex>(m);
-            auto wait_guard = make_wait_guard();
+            auto wait_guard = make_relaxed_wait_guard();
             return c.wait_for(guard, [&]() -> bool { return object.load(order) != nval; }, rel_time) == cv_status::no_timeout;
         }
         template <class F>

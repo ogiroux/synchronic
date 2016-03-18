@@ -259,7 +259,12 @@ int main(int argc, const char * argv[]) {
     std::mt19937 r;
     std::mutex m1;
 
+//#if defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
 //    typedef bartosz_mutex test_mutex;
+//#else
+//    typedef ttas_mutex test_mutex;
+//#endif
+    
     typedef ttas_mutex test_mutex;
 
     test_mutex m2;
