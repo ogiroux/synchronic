@@ -186,20 +186,26 @@ public :
 };
 
 template <class F>
-double do_run(std::string const& what, int threads, F f, double expected)
+double do_run(std::string const& what, int threads, F f, int count, double cost)
 {
-    std::cout << what << " (" << threads << "T, " << time_target_in_seconds << "s)" << std::endl;
+    auto expected = count * cost;
+    std::cout << what << " (" << threads << "T, " << time_target_in_seconds << "s, step = " << count << " x " << cost << " ns)" << std::endl;
+    
     auto r = run().time(threads, f, std::uint64_t(time_target_in_seconds * 1E9 / expected));
     std::cout << "\ttotal progress : " << r.steps << " steps in " << r.wall_time << "ns" << std::endl;
+    
     auto time_per_step = r.wall_time / r.steps;
     std::cout << "\trate : " << time_per_step << " ns/step" << std::endl;
     std::cout << "\toverhead over " << expected << " ns/step : " << std::endl;
+    
     auto wall_time = time_per_step - expected;
     std::cout << "\t\t" << std::left << std::setfill(' ') << std::setw(26) << "wall-time = " << wall_time << " ns/step (" << wall_time / expected * 100 << "%)" << std::endl;
+    
     auto cpu_time = r.cpu_time / r.steps - expected;
     std::cout << "\t\t" << std::left << std::setfill(' ') << std::setw(26) << "cpu-time =" << cpu_time << " ns/step (" << cpu_time / expected * 100 << "%)" << std::endl;
     std::cout << std::endl;
-    return time_per_step;
+    
+    return time_per_step / count;
 }
 
 int main(int argc, const char * argv[]) {
@@ -212,34 +218,35 @@ int main(int argc, const char * argv[]) {
     std::cout << "Measuring work item cost...\r" << std::flush;
     auto cost = compute_work_item_cost(r);
     
-    auto target_count = std::uint64_t(5E1 / cost);
+    auto target_count = 10;//std::uint64_t(5E1 / cost);
     std::cout << "Work item cost : " << cost << " ns/iteration, targeting " << target_count << " iterations/step.\n";
     std::cout << std::endl;
 
     auto trial_1 = do_run("Control #1 run for 1-thread", 1, [=](auto) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count * cost) / target_count;
+    }, target_count, cost);
     
     auto cost_1 = (std::min)(trial_1,do_run("Control #2 run for 1-thread", 1, [=](auto) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count * cost) / target_count);
+    }, target_count, cost));
 
-    auto target_count_1 = std::uint64_t(5E1 / (std::min)(cost_1, cost));
     if(cost_1 < cost) {
-        std::cout << "Adjusting cost to " << cost_1 << " ns/iteration, and retargeting to " << target_count_1 << " iterations/step.\n";
+        cost = cost_1;
+        target_count = 10;//std::uint64_t(5E1 / cost);
+        std::cout << "Adjusting cost to " << cost << " ns/iteration, and retargeting to " << target_count << " iterations/step.\n";
         std::cout << std::endl;
     }
     
     std::mutex m1;
     do_run("Measuring std::mutex uncontended 1-thread", 1, [=,&m1](auto) mutable {
         { std::unique_lock<std::mutex>(m1); }
-        for (int i = 0; i < target_count_1; ++i) r.discard(1);
-    }, target_count_1 * cost_1);
+        for (int i = 0; i < target_count; ++i) r.discard(1);
+    }, target_count, cost);
     ttas_mutex m2;
     do_run("Measuring ttas_mutex uncontended 1-thread", 1, [=,&m2](auto) mutable {
         { std::unique_lock<ttas_mutex>(m2); }
-        for (int i = 0; i < target_count_1; ++i) r.discard(1);
-    }, target_count_1 * cost_1);
+        for (int i = 0; i < target_count; ++i) r.discard(1);
+    }, target_count, cost);
 
     auto const N = std::thread::hardware_concurrency();
     constexpr int k_limit = 1024;
@@ -250,18 +257,19 @@ int main(int argc, const char * argv[]) {
 
     auto trial_n = do_run("Control #1 for N-thread", N, [=](auto i) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count_1 * cost_1) / target_count_1;
+    }, target_count, cost);
     
     auto cost_n = (std::min)(trial_n,do_run("Control #2 for N-thread", N, [=](auto i) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count_1 * cost_1) / target_count_1);
+    }, target_count, cost));
     
-    auto target_count_n = std::uint64_t(5E1 / (std::min)(cost_n, cost_1));
     if(cost_n < cost) {
+        cost = cost_n;
+        target_count = 10;//std::uint64_t(5E1 / cost);
         std::cout << "NOTE: Based purely on these numbers, your system appears to have hyper-threads enabled.\n";
         std::cout << "NOTE: Will use the N-thread control cost as the base cost.\n";
         std::cout << std::endl;
-        std::cout << "Adjusting cost to " << cost_n << " ns/iteration, and retargeting to " << target_count_n << " iterations/step.\n";
+        std::cout << "Adjusting cost to " << cost << " ns/iteration, and retargeting to " << target_count << " iterations/step.\n";
         std::cout << std::endl;
     }
     
@@ -269,48 +277,51 @@ int main(int argc, const char * argv[]) {
     do_run("Measuring std::mutex uncontended N-thread", N, [=,&m1N](auto i) mutable {
         auto& m = m1N[i];
         { std::unique_lock<std::mutex> l(m); }
-        for (int i = 0; i < target_count_n; ++i) r.discard(1);
-    }, target_count_n * cost_n);
+        for (int i = 0; i < target_count; ++i) r.discard(1);
+    }, target_count, cost);
+    
     ttas_mutex m2N[k_limit];
     do_run("Measuring ttas_mutex uncontended N-thread", N, [=,&m2N](auto i) mutable {
         auto& m = m2N[i];
         { std::unique_lock<ttas_mutex> l(m); }
-        for (int i = 0; i < target_count_n; ++i) r.discard(1);
-    }, target_count_n * cost_n);
+        for (int i = 0; i < target_count; ++i) r.discard(1);
+    }, target_count, cost);
     
+    /*
+     This is probably fully contended because they all have copies of the same mt13997.
+     
     auto mask = ~(~0 << std::ilogb(N));
     do_run("Measuring std::mutex low-p contended N-thread", N, [=,&m1N](auto i) mutable {
         auto& m = m1N[r() & mask];
         { std::unique_lock<std::mutex> l(m); }
-        for (int i = 0; i < target_count_n-1; ++i) r.discard(1);
-    }, target_count_n * cost_n);
+        for (int i = 0; i < target_count-1; ++i) r.discard(1);
+    }, target_count, cost);
     do_run("Measuring ttas_mutex low-p contended N-thread", N, [=, &m2N](auto i) mutable {
         auto& m = m2N[r() & mask];
         { std::unique_lock<ttas_mutex> l(m); }
-        for (int i = 0; i < target_count_n-1; ++i) r.discard(1);
-    }, target_count_n * cost_n);
-
-    auto short_time = 3E2;
-    auto short_count = int(short_time / cost_n);
+        for (int i = 0; i < target_count-1; ++i) r.discard(1);
+    }, target_count, cost);
+    */
+    
+    auto short_count = int(3E2 / cost);
     do_run("Measuring std::mutex short contended N-thread", N, [=, &m1](auto) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < short_count; ++i) r.discard(1);
-    }, short_time);
+    }, short_count, cost);
     do_run("Measuring ttas_mutex short contended N-thread", N, [=, &m2](auto) mutable {
         std::unique_lock<ttas_mutex> l(m2); 
         for (int i = 0; i < short_count; ++i) r.discard(1);
-    }, short_time);
+    }, short_count, cost);
 
-    auto long_time = 1E7;
-    auto long_count = int(long_time / cost_n);
+    auto long_count = int(1E7 / cost);
     do_run("Measuring std::mutex long contended N-thread", N, [=, &m1](auto) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < long_count; ++i) r.discard(1);
-    }, long_time);
+    }, long_count, cost);
     do_run("Measuring ttas_mutex long contended N-thread", N, [=, &m2](auto) mutable {
         std::unique_lock<ttas_mutex> l(m2);
         for (int i = 0; i < long_count; ++i) r.discard(1);
-    }, long_time);
+    }, long_count, cost);
 
     return 0;
 }
