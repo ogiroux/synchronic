@@ -56,12 +56,12 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #ifdef __linux__
     #include <sched.h>
-    void set_affinity(int cpu) {
+    void set_affinity(std::uint64_t cpu) {
         
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         
-        cpu %= sizeof(integer_t) * 8;
+        cpu %= sizeof(int) * 8;
         CPU_SET(cpu, &cpuset);
         
         sched_setaffinity(0, sizeof(cpuset), &cpuset);
@@ -77,7 +77,7 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
                                                 thread_policy_t         policy_info,
                                                 mach_msg_type_number_t  count);
 
-    void set_affinity(int cpu) {
+    void set_affinity(std::uint64_t cpu) {
 
         cpu %= sizeof(integer_t) * 8;
         integer_t count = (1 << cpu);
@@ -107,6 +107,11 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
         double nanoseconds_per_clock_tick = 100; //100-nanosecond intervals
         auto clock_ticks_elapsed = (make64(end.first) - make64(start.first)) + (make64(end.second) - make64(start.second));
         return clock_ticks_elapsed * nanoseconds_per_clock_tick;
+    }
+    void set_affinity(std::uint64_t cpu) {
+
+        cpu %= sizeof(std::uint64_t) * 8;
+        SetThreadAffinityMask(GetCurrentThread(), 1 << cpu);
     }
 #endif
 
@@ -172,7 +177,7 @@ public :
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
         report r;
-        r.wall_time = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        r.wall_time = double(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
         r.cpu_time = cpu_time_consumed(cpu_start, cpu_end);
         r.steps = (it2 - it1);
 
@@ -215,11 +220,11 @@ int main(int argc, const char * argv[]) {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count * cost) / target_count;
     
-    auto cost_1 = std::min(trial_1,do_run("Control #2 run for 1-thread", 1, [=](auto) mutable {
+    auto cost_1 = (std::min)(trial_1,do_run("Control #2 run for 1-thread", 1, [=](auto) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count * cost) / target_count);
 
-    auto target_count_1 = std::uint64_t(5E1 / std::min(cost_1, cost));
+    auto target_count_1 = std::uint64_t(5E1 / (std::min)(cost_1, cost));
     if(cost_1 < cost) {
         std::cout << "Adjusting cost to " << cost_1 << " ns/iteration, and retargeting to " << target_count_1 << " iterations/step.\n";
         std::cout << std::endl;
@@ -247,11 +252,11 @@ int main(int argc, const char * argv[]) {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count_1 * cost_1) / target_count_1;
     
-    auto cost_n = std::min(trial_n,do_run("Control #2 for N-thread", N, [=](auto i) mutable {
+    auto cost_n = (std::min)(trial_n,do_run("Control #2 for N-thread", N, [=](auto i) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count_1 * cost_1) / target_count_1);
     
-    auto target_count_n = std::uint64_t(5E1 / std::min(cost_n, cost_1));
+    auto target_count_n = std::uint64_t(5E1 / (std::min)(cost_n, cost_1));
     if(cost_n < cost) {
         std::cout << "NOTE: Based purely on these numbers, your system appears to have hyper-threads enabled.\n";
         std::cout << "NOTE: Will use the N-thread control cost as the base cost.\n";
