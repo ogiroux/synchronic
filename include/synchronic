@@ -133,12 +133,15 @@ inline namespace concurrency_v2 {
 
 #endif
 
-    static constexpr int __magic_number_1 = 128;
-    static constexpr int __magic_number_2 = 8;
-    static constexpr int __magic_number_3 = 4;
+//    static constexpr int __magic_number_1 = 128;
+//    static constexpr int __magic_number_2 = 8;
+//    static constexpr int __magic_number_3 = 4;
+    static constexpr int __magic_number_1 = 42;
+    static constexpr int __magic_number_2 = 42;
+    static constexpr int __magic_number_3 = 6;
 
     class __synchronic_exponential_backoff {
-        int microseconds = __magic_number_3;
+        int microseconds = 1 << __magic_number_3;
     public:
         void sleep(int us = 0) {
             if(us != 0)
@@ -183,8 +186,8 @@ inline namespace concurrency_v2 {
 
     template <class T>
     class __direct_futex_synchronic {
-        mutable atomic<int> waiting;
         mutable atomic<int> notifying;
+        mutable atomic<int> waiting;
     public:
         __direct_futex_synchronic() : notifying(0), waiting(0) { }
         ~__direct_futex_synchronic() { 
@@ -212,7 +215,13 @@ inline namespace concurrency_v2 {
         __syn_gcc_inline void notify(atomic<T>& object, F func, bool all) {
 
             notifying.fetch_add(1, memory_order_acq_rel);
-            func(object);
+            try {
+                func(object);
+            }
+            catch (...) {
+                notifying.fetch_add(-1, memory_order_release);
+                throw;
+            }
             if(__synchronic_expect(waiting.fetch_add(0, memory_order_acq_rel) != 0, 0)) {
                 if (all)
                     __synchronic_wake_all(&object);
@@ -284,7 +293,7 @@ inline namespace concurrency_v2 {
     public:
         __condition_synchronic() : notifying(0), waiting(0) { }
         ~__condition_synchronic() { 
-            while(notifying.load() != 0)
+            while(notifying.load(memory_order_acquire) != 0)
                 __synchronic_spin_for(notifying, 0, memory_order_relaxed);
         }
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
@@ -303,18 +312,24 @@ inline namespace concurrency_v2 {
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
-            notifying.fetch_add(1);
-            func(object);
-            if (__synchronic_expect(waiting.fetch_add(0) == 0, 1))
-                return;
-            {
-                unique_lock<mutex> guard2(m);
+            notifying.fetch_add(1, memory_order_acquire);
+            try {
+                func(object);
             }
-            if (all)
-                c.notify_all();
-            else
-                c.notify_one();
-            notifying.fetch_add(-1);
+            catch (...) {
+                notifying.fetch_add(-1, memory_order_release);
+                throw;
+            }
+            if (__synchronic_expect(waiting.fetch_add(0) != 0, 0)) {
+                {
+                    unique_lock<mutex> guard2(m);
+                }
+                if (all)
+                    c.notify_all();
+                else
+                    c.notify_one();
+            }
+            notifying.fetch_add(-1, memory_order_release);
         }
     };
 
