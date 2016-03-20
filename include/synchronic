@@ -189,9 +189,9 @@ inline namespace concurrency_v2 {
 
     template <class T>
     class __direct_futex_synchronic {
-    public:
         mutable atomic<int> waiting;
         mutable atomic<int> notifying;
+    public:
         __direct_futex_synchronic() : notifying(0), waiting(0) { }
         ~__direct_futex_synchronic() { 
             while(notifying.load(memory_order_acquire) != 0)
@@ -266,7 +266,7 @@ inline namespace concurrency_v2 {
     };
 
     template <class T>
-    struct __synchronic_base<T, typename enable_if<__synchronic_native<T>::value>::type> : public __direct_futex_synchronic<T> {
+    struct __synchronic_base<T, typename enable_if<__synchronic_native<T>::value>::type> : protected __direct_futex_synchronic<T> {
     };
 
 #else
@@ -283,7 +283,7 @@ namespace experimental {
 inline namespace concurrency_v2 {
 
     template <class T>
-    class __condition_synchronic : protected __racy_synchronic_base {
+    class __condition_synchronic {
         mutable atomic<int> notifying;
         mutable atomic<int> waiting;
         mutable mutex m;
@@ -369,7 +369,7 @@ inline namespace concurrency_v2 {
     };
 
     template <class T, bool optimize_size = false>
-    class synchronic : public conditional<optimize_size,__timed_synchronic<T>,__synchronic_base<T>>::type {
+    class synchronic : protected conditional<optimize_size,__timed_synchronic<T>,__synchronic_base<T>>::type {
         typedef typename conditional<optimize_size,__timed_synchronic<T>,__synchronic_base<T>>::type base;
     public:
         synchronic() = default;
