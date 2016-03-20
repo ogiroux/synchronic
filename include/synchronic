@@ -42,6 +42,7 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <unistd.h>
 #include <linux/futex.h>
 #include <sys/syscall.h>
+#include <sys/types.h>
 #include <climits>
 #endif //__linux__
 
@@ -78,26 +79,26 @@ inline namespace concurrency_v2 {
 
 #if defined(WIN32) && _WIN32_WINNT >= 0x0602
 
-    template <class P, class V>
-    void __synchronic_wait(P p, V v) {
+    template <class V>
+    void __synchronic_wait(const void* p, V v) {
         WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),-1);
     }
-    template <class P, class V, class T>
-    void __synchronic_wait_timed(P p,V v,T t) {
-        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),chrono::duration_cast<chrono::milliseconds>(t).count());
+    template <class V, class Rep, class Period>
+    void __synchronic_wait_timed(const void* p, V v, chrono::duration<Rep, Period> const& delta) {
+        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),chrono::duration_cast<chrono::milliseconds>(delta).count());
     }
-    template <class P>
-    void __synchronic_wake_one(P p) {
+    inline void __synchronic_wake_one(const void* p) {
         WakeByAddressSingle((PVOID)p);
     }
-    template <class P>
-    void __synchronic_wake_all(P p) {
+    inline void __synchronic_wake_all(const void* p) {
         WakeByAddressAll((PVOID)p);
     }
     template <class T>
     struct __synchronic_native {
         static constexpr bool value = is_pod<T>::value && (sizeof(T) <= 8);
     };
+    typedef DWORD __synchronic_tid;
+    inline __synchronic_tid __synchronic_gettid() { return GetCurrentThreadId(); }
 
 #endif
 
@@ -110,32 +111,25 @@ inline namespace concurrency_v2 {
         ts.tv_nsec = static_cast<long>(chrono::duration_cast<chrono::nanoseconds>(delta).count());
         return ts;
     }
-    inline long futex(void const* addr1, int op, int val1) {
-        return syscall(SYS_futex, addr1, op, val1, 0, 0, 0);
+    inline void __synchronic_wait(const void* p, int v) {
+        syscall(SYS_futex, p, FUTEX_WAIT_PRIVATE, v, 0, 0, 0);
     }
-    inline long futex(void const* addr1, int op, int val1, struct timespec timeout) {
-        return syscall(SYS_futex, addr1, op, val1, &timeout, 0, 0);
+    template < class Rep, class Period>
+    void __synchronic_wait_timed(const void* p, int v, const chrono::duration<Rep, Period>& t) {
+        syscall(SYS_futex, p, FUTEX_WAIT_PRIVATE, v,  __synchronic_to_timespec(t), 0, 0);
     }
-    template <class P, class V>
-    void __synchronic_wait(P p, V v) {
-        futex(p, FUTEX_WAIT_PRIVATE, v);
+    inline void __synchronic_wake_one(const void* p) {
+        syscall(SYS_futex, p, FUTEX_WAKE_PRIVATE, 1, 0, 0, 0);
     }
-    template <class P, class V, class T>
-    void __synchronic_wait_timed(P p,V v,T t) {
-        futex(p, FUTEX_WAIT_PRIVATE, v, __synchronic_to_timespec(t));
-    }
-    template <class P>
-    void __synchronic_wake_one(P p) {
-        futex(p, FUTEX_WAKE_PRIVATE, 1);
-    }
-    template <class P>
-    void __synchronic_wake_all(P p) {
-        futex(p, FUTEX_WAKE_PRIVATE, INT_MAX);
+    inline void __synchronic_wake_all(const void* p) {
+        syscall(SYS_futex, p, FUTEX_WAKE_PRIVATE, INT_MAX, 0, 0, 0);
     }
     template <class T>
     struct __synchronic_native {
         static constexpr bool value = is_integral<T>::value && (sizeof(T) == 4);
     };
+    typedef pid_t __synchronic_tid;
+    inline __synchronic_tid __synchronic_gettid() { return syscall(SYS_gettid); }
 
 #endif
 
@@ -229,9 +223,10 @@ inline namespace concurrency_v2 {
         }
     };
     template <class T>
-    class __indirect_futex_synchronic : protected __direct_futex_synchronic<int> {
-        typedef __direct_futex_synchronic<int> base;
-        mutable atomic<int> last_writer;
+    class __indirect_futex_synchronic : protected __direct_futex_synchronic<__synchronic_tid> {
+        static_assert(__synchronic_native<__synchronic_tid>::value,"Thread native handle must be a valid synchronic type for this to work.");
+        typedef __direct_futex_synchronic<__synchronic_tid> base;
+        mutable atomic<__synchronic_tid> last_writer;
     public:
         __indirect_futex_synchronic() : last_writer(-1) { }
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
@@ -253,7 +248,7 @@ inline namespace concurrency_v2 {
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
-            int me = this_thread::get_id();
+            int me = __synchronic_gettid();
             func(object);
             base::notify(last_writer, [me](auto& object) { object.store(me, memory_order_release); }, all);
         }
