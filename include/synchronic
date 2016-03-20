@@ -229,35 +229,33 @@ inline namespace concurrency_v2 {
         }
     };
     template <class T>
-    class __indirect_futex_synchronic : protected __direct_futex_synchronic<void*> {
-        typedef __direct_futex_synchronic<void*> base;
-        mutable atomic<void*> lastuser;
+    class __indirect_futex_synchronic : protected __direct_futex_synchronic<int> {
+        typedef __direct_futex_synchronic<int> base;
+        mutable atomic<int> last_writer;
     public:
-        __indirect_futex_synchronic() : lastuser(nullptr) { }
+        __indirect_futex_synchronic() : last_writer(-1) { }
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
 
-            int me; //This will give us a unique address on the stack. We'll use it as our handle.
-            lastuser.store(&me);
+            last_writer.store(-1);
             while(object.load(order) == nval) {
-//                base::wait_for_change(lastuser, &me, memory_order_relaxed);
-                lastuser.store(&me);
+                base::wait_for_change(last_writer, -1, memory_order_acquire);
+                last_writer.store(-1);
             }
         }
         template <class Rep, class Period>
         bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
 
-            int me; //This will give us a unique address on the stack. We'll use it as our handle.
-            lastuser.store(&me);
+            last_writer.store(-1);
             if(object.load(order) != nval)
                 return true;
-//            base::wait_for_change_for(lastuser, &me, memory_order_acquire, rel_time);
+            base::wait_for_change_for(last_writer, -1, memory_order_acquire, rel_time);
             return object.load(order) != nval;
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
-            int me; //This will give us a unique address on the stack. We'll use it as our handle.
+            int me = this_thread::get_id();
             func(object);
-//            base::notify(lastuser, [&me](auto& object) { object.store(&me); }, all);
+            base::notify(last_writer, [me](auto& object) { object.store(me, memory_order_release); }, all);
         }
     };
 
@@ -363,14 +361,15 @@ inline namespace concurrency_v2 {
 
     // 29.9, synchronic operations
 
-    enum class wait_hint {
-        optimize_latency,
-        optimize_utilization
+    enum class synchronic_option {
+        optimize_for_short_wait,
+        optimize_for_long_wait,
+        optimize_for_size
     };
 
-    template <class T, bool optimize_size = false>
-    class synchronic : protected conditional<optimize_size,__timed_synchronic<T>,__synchronic_base<T>>::type {
-        typedef typename conditional<optimize_size,__timed_synchronic<T>,__synchronic_base<T>>::type base;
+    template <class T, synchronic_option O = synchronic_option::optimize_for_short_wait>
+    class synchronic : protected conditional<O == synchronic_option::optimize_for_size,__timed_synchronic<T>,__synchronic_base<T>>::type {
+        typedef typename conditional<O == synchronic_option::optimize_for_size,__timed_synchronic<T>,__synchronic_base<T>>::type base;
     public:
         synchronic() = default;
         ~synchronic() = default;
@@ -380,19 +379,17 @@ inline namespace concurrency_v2 {
         synchronic& operator=(synchronic&&) = delete;
 
         __syn_gcc_inline void wait(const atomic<T>& object, T desired, 
-          memory_order order = memory_order_seq_cst, 
-          wait_hint hint = wait_hint::optimize_latency) const {
+          memory_order order = memory_order_seq_cst) const {
 
-            if (__synchronic_expect(hint == wait_hint::optimize_latency && __synchronic_spin_for(object, desired, order), 1))
+            if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for(object, desired, order), 1))
                 return;
             for (auto t = object.load(order); t != desired; t = object.load(order))
                 base::wait_for_change(object, t, memory_order_relaxed);
         }
         __syn_gcc_inline void wait_for_change(const atomic<T>& object, T current, 
-          memory_order order = memory_order_seq_cst, 
-          wait_hint hint = wait_hint::optimize_latency) const {
+          memory_order order = memory_order_seq_cst) const {
 
-            if (__synchronic_expect(hint == wait_hint::optimize_latency && __synchronic_spin_for_change(object, current, order), 1))
+            if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for_change(object, current, order), 1))
                 return;
             base::wait_for_change(object, current, order);
         }
@@ -400,18 +397,16 @@ inline namespace concurrency_v2 {
         template <class Clock, class Duration>
         __syn_gcc_inline bool wait_for_change_until(const atomic<T>& object, T current, 
           chrono::time_point<Clock, Duration> const& abs_time, 
-          memory_order order = memory_order_seq_cst, 
-          wait_hint hint = wait_hint::optimize_latency) const {
+          memory_order order = memory_order_seq_cst) const {
 
-            return wait_for_change_for(object, current, abs_time - chrono::steady_clock::now(), hint);
+            return wait_for_change_for(object, current, abs_time - chrono::steady_clock::now());
         }
         template <class Rep, class Period>
         __syn_gcc_inline bool wait_for_change_for(const atomic<T>& object, T current, 
           chrono::duration<Rep, Period> const& rel_time, 
-          memory_order order = memory_order_seq_cst, 
-          wait_hint hint = wait_hint::optimize_latency) const {
+          memory_order order = memory_order_seq_cst) const {
 
-            if (__synchronic_expect(hint == wait_hint::optimize_latency && __synchronic_spin_for_change(object, current, order), 1))
+            if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for_change(object, current, order), 1))
                 return true;
             return base::wait_for_change_for(object, current, order, rel_time);
         }
