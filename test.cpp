@@ -194,7 +194,7 @@ public :
         std::uint64_t it2 = iterations;
         auto end = my_clock::now();
         auto cpu_end = get_cpu_time();
-        std::cout << "Done, canceling threads...\r";
+        std::cout << "Done, canceling threads...\r" << std::flush;
         stop = true;
         while (running != 0) std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -260,7 +260,7 @@ int main(int argc, const char * argv[]) {
     std::mutex m1;
 
 //#if defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
-//    typedef bartosz_mutex test_mutex;
+//    typedef simple_mutex test_mutex;
 //#else
 //    typedef ttas_mutex test_mutex;
 //#endif
@@ -279,21 +279,14 @@ int main(int argc, const char * argv[]) {
    
     auto target_count = int(5E1 / cost);
     std::cout << "Work item cost : " << cost << " ns/iteration, targeting " << target_count << " iterations/step.\n";
+    std::cout << "This cost is only used as a seed. Control runs will determine expected performance of each case.\n";
     std::cout << std::endl;
 
-    auto trial_1 = do_run(nullstream, "Control #1 run for 1-thread", 1, [=](auto, auto&) mutable {
+    cost = do_run(nullstream, "CONTROL run for 1-thread", 1, [=](auto, auto&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    
-    auto trial_2 = do_run(nullstream, "Control #2 run for 1-thread", 1, [=](auto, auto&) mutable {
-        for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count, cost);
-
-    if((std::min)(trial_1, trial_2) < cost) {
-        cost = (std::min)(trial_1, trial_2);
-        std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
-        std::cout << std::endl;
-    }
+    std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
+    std::cout << std::endl;
     
     do_run(csv, "std::mutex uncontended 1-thread", 1, [=,&m1](auto, auto&) mutable {
         { std::unique_lock<std::mutex>(m1); }
@@ -309,59 +302,50 @@ int main(int argc, const char * argv[]) {
         std::cout << "ERROR: Cannot continue because there are more than " << k_limit << " hardware threads on this system.\n";
         std::cout << "ERROR: This is an arbitrary limit. Feel free to raise it, recompile and rerun.\n";
     }
-
-    auto trial_n1 = do_run(nullstream, "Control #1 for N-thread", N, [=](auto i, auto&) mutable {
+    auto cost_n = do_run(nullstream, "CONTROL for uncontended N-thread", N, [=](auto i, auto&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    
-    auto trial_n2 = do_run(nullstream, "Control #2 for N-thread", N, [=](auto i, auto&) mutable {
-        for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count, cost);
-    
-    if((std::min)(trial_n1, trial_n2) < cost) {
-        cost = (std::min)(trial_n1, trial_n2);
+    if(cost_n < cost)
         std::cout << "NOTE: Based purely on these numbers, your system appears to have hyper-threads enabled.\n";
-        std::cout << "NOTE: Will use the N-thread control cost as the base cost.\n";
-        std::cout << std::endl;
-        std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
-        std::cout << std::endl;
-    }
-    
+    cost = cost_n;
+    std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
+    std::cout << std::endl;
     std::mutex m1N[k_limit];
     do_run(csv, "std::mutex uncontended N-thread", N, [=,&m1N](auto i, auto&) mutable {
         auto& m = m1N[i];
         { std::unique_lock<std::mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    
     test_mutex m2N[k_limit];
     do_run(csv, "ttas_mutex uncontended N-thread", N, [=,&m2N](auto i, auto&) mutable {
         auto& m = m2N[i];
         { std::unique_lock<test_mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
-    }, target_count, cost);
-    
-    
+    }, target_count, cost);    
     {
         std::random_device d;
         if(d.entropy() == 0)
-            std::cout << "NOTE: the system randomness source claims to have no entropy, probabilistic tests may not operate correctly." << std::endl;
+            std::cout << "NOTE: the system randomness source claims to have no entropy, low-p tests may not operate correctly." << std::endl;
         std::cout << std::endl;
     }
-    
-    auto mask = ~(~0 << std::ilogb(N));
-    do_run(csv, "std::mutex low-p contended N-thread", N, [=,&m1N](auto i, auto& dr) mutable {
+    auto mask = ~(~0 << std::ilogb(N << 2));
+    do_run(csv, "std::mutex low-prob contended N-thread", N, [=,&m1N](auto i, auto& dr) mutable {
         auto& m = m1N[dr() & mask];
         { std::unique_lock<std::mutex> l(m); }
         for (int j = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    do_run(csv, "ttas_mutex low-p contended N-thread", N, [=, &m2N](auto i, auto& dr) mutable {
+    do_run(csv, "ttas_mutex low-prob contended N-thread", N, [=, &m2N](auto i, auto& dr) mutable {
         auto& m = m2N[dr() & mask];
         { std::unique_lock<test_mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 
-    auto short_count = int(3E2 / cost);
+    auto short_count = int(2E2 / cost);
+    cost = do_run(nullstream, "CONTROL for short contended N-thread", 1, [=](auto i, auto&) mutable {
+        for (int i = 0; i < short_count; ++i) r.discard(1);
+    }, short_count, cost);
+    std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
+    std::cout << std::endl;
     do_run(csv, "std::mutex short contended N-thread", N, [=, &m1](auto, auto&) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < short_count; ++i) r.discard(1);
@@ -372,6 +356,11 @@ int main(int argc, const char * argv[]) {
     }, short_count, cost);
 
     auto long_count = int(1E7 / cost);
+    cost = do_run(nullstream, "CONTROL for long contended N-thread", 1, [=](auto i, auto&) mutable {
+        for (int i = 0; i < long_count; ++i) r.discard(1);
+    }, long_count, cost);
+    std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
+    std::cout << std::endl;
     do_run(csv, "std::mutex long contended N-thread", N, [=, &m1](auto, auto&) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < long_count; ++i) r.discard(1);

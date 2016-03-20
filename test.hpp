@@ -85,11 +85,11 @@ private :
 
 #if defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
 
-class bartosz_mutex
+class simple_mutex
 {
     std::atomic<int> word;
 public:
-    bartosz_mutex() : word(0) { }
+    simple_mutex() : word(0) { }
     void lock()
     {
         // try to atimically swap 0 -> 1
@@ -118,14 +118,10 @@ public:
 
 #endif
 
-struct ttas_mutex {
-
-    ttas_mutex() : locked(0) {
-    }
-
+struct alignas(64) ttas_mutex {
+    ttas_mutex() :  locked(0) { }
 	ttas_mutex(const ttas_mutex&) = delete;
 	ttas_mutex& operator=(const ttas_mutex&) = delete;
-
     void lock() {
         while(1) {
             int state = 0;
@@ -134,14 +130,12 @@ struct ttas_mutex {
             sync.wait_for_change(locked, state, std::memory_order_relaxed);
         }
     }
-
     void unlock() {
         sync.notify_one(locked, 0, std::memory_order_release);
     }
-
 private :
-    alignas(64) std::atomic<int> locked;
-    alignas(64) std::experimental::synchronic<int> sync;
+    std::atomic<int> locked;
+    std::experimental::synchronic<int> sync;
 };
 
 struct ticket_mutex {
