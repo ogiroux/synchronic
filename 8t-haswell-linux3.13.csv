@@ -1,11 +1,11 @@
 name, threads, steps, time, expected, real/expected, cpu/expected, user/cpu, system/cpu
-"std::mutex uncontended 1-thread",1,138822627,1.00054e+10,70.8601,1.01712,1.01555,1,0
-"ttas_mutex uncontended 1-thread",1,147063563,1.00005e+10,70.8601,0.959656,0.958647,1,0
-"std::mutex uncontended N-thread",8,239137276,1.00007e+10,36.5125,1.14536,8.72472,0.968102,0.0318981
-"ttas_mutex uncontended N-thread",8,298458257,1.0007e+10,36.5125,0.918289,7.07871,0.968369,0.0316308
-"std::mutex low-prob contended N-thread",8,179973371,1.00006e+10,36.5125,1.52186,8.90541,0.667977,0.332023
-"ttas_mutex low-prob contended N-thread",8,187469983,1.00013e+10,36.5125,1.46111,9.84367,0.815227,0.184773
-"std::mutex short contended N-thread",8,6027640,1.00002e+10,297.969,5.56788,36.5302,0,1
-"ttas_mutex short contended N-thread",8,17808008,1.00012e+10,297.969,1.8848,10.8269,0.439339,0.560661
-"std::mutex long contended N-thread",8,1098,1.00003e+10,9.48923e+06,0.959799,0.984722,1,0
-"ttas_mutex long contended N-thread",8,1066,1.00008e+10,9.48923e+06,0.988655,1.01923,1,0
+"std::mutex uncontended 1-thread",1,180428924,1.00076e+10,58.7212,0.944561,0.944785,1,0
+"ttas_mutex uncontended 1-thread",1,180809876,1.00002e+10,58.7212,0.941867,0.941853,1,0
+"std::mutex uncontended N-thread",8,250634673,1.00044e+10,32.6942,1.2209,9.55541,0.968838,0.0311622
+"ttas_mutex uncontended N-thread",8,304777079,1.00001e+10,32.6942,1.00358,7.78266,0.957189,0.0428111
+"std::mutex low-prob contended N-thread",8,199411781,1.00001e+10,32.6942,1.53385,9.48675,0.649636,0.350364
+"ttas_mutex low-prob contended N-thread",8,208745749,1.00027e+10,32.6942,1.46564,10.2787,0.775481,0.224519
+"std::mutex short contended N-thread",8,4072666,1.00007e+10,289.358,8.48625,48.1816,0.00651638,0.993484
+"ttas_mutex short contended N-thread",8,18683199,1.00013e+10,289.358,1.84999,11.2927,0.50172,0.49828
+"std::mutex long contended N-thread",8,1048,1.00001e+10,9.59973e+06,0.993991,1.01784,1,0
+"ttas_mutex long contended N-thread",8,1046,1.00029e+10,9.59973e+06,0.996172,1.03174,1,0
