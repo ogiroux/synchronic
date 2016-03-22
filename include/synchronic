@@ -24,6 +24,34 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED 
 OF THE POSSIBILITY OF SUCH DAMAGE.
 
+ */
+
+/*
+ 
+ABOUT THE COMMENTS IN THIS FILE
+
+They are specifically intended to aid in independent implementations of the
+synchronic<T> type, as specified in the ISO C++ paper http://wg21.link/p0126 .
+
+General notes:
+ * Each synchronic<T> type implements a polling operation with back-off.
+ * The synchronic<T> type definitely can have non-trivial size overheads unless the size-optimized implementation is required.
+ * The back-off approach always comprises four phases:
+  1. Poll with 'relax'. About 40 iterations.
+  2. Poll with 'yield'. About 40 iterations.
+  3. Poll with 'sleep'. About 6 iterations, with exponential delay.
+  4. Suspend.
+ * The suspension process differs greatly based on platform, and on the properties of <T>:
+  1. If the size-optimized implementation is used, an exponential delay is used.
+  2. Else, on Linux, or Windows 8+:
+    * For integral T of size = 4 on Linux, or else pod T of size <= 8, a futex is used directly.
+    * For other T, an extra integer is used to stage into a futex indirectly.
+  3. Elsewhere, a mutex and a condition variable are used.
+
+It may be best to read this file from the bottom, and up.
+ 
+- Olivier Giroux (ogiroux@nvidia.com)
+ 
 */
 
 #ifndef __SYNCHRONIC
@@ -50,60 +78,36 @@ namespace std {
 namespace experimental {
 inline namespace concurrency_v2 {
 
-#ifdef __GNUC__
-    //Incredible time waste to figure we need to force GCC in two places
-    #define __syn_gcc_inline __attribute__((always_inline)) 
-#else
-    #define __syn_gcc_inline 
-#endif
-
+// On Linux, we use sched_yield and punt oversubscribed conditions to wait operations.
 #ifdef __linux__
     inline void __synchronic_yield() { sched_yield(); }
 #else
+    // Elsewhere, we use the Standard yield for lack anything better.
     inline void __synchronic_yield() { this_thread::yield(); }
 #endif
 
-#if defined(WIN32) && (defined(_M_X64) || defined(_M_IX86))
+// On x86, 'rep;nop' (aka 'pause') is a quick yield for hyper-threads.
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
     inline void __synchronic_relax() { _mm_pause(); }
-#elif defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
     inline void __synchronic_relax() { asm volatile("rep; nop" ::: "memory"); }
 #else
+    // Elsehwere, we use the Standard yield for that too.
     inline void __synchronic_relax() { __synchronic_yield(); }
 #endif
 
-#if defined(_MSC_VER)
-    inline constexpr bool __synchronic_expect(bool condition, int common) { return condition; }
-#else
+// On GCC (and Clang) we provide some expected profile information.
+#if defined(__GNUC__)
     #define __synchronic_expect __builtin_expect
+#else
+    // For other compilers, we just lose this information.
+    #define __synchronic_expect(c,e) c
 #endif
 
-#if defined(WIN32) && _WIN32_WINNT >= 0x0602
-
-    template <class V>
-    void __synchronic_wait(const void* p, V v) {
-        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),-1);
-    }
-    template <class V, class Rep, class Period>
-    void __synchronic_wait_timed(const void* p, V v, chrono::duration<Rep, Period> const& delta) {
-        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),chrono::duration_cast<chrono::milliseconds>(delta).count());
-    }
-    inline void __synchronic_wake_one(const void* p) {
-        WakeByAddressSingle((PVOID)p);
-    }
-    inline void __synchronic_wake_all(const void* p) {
-        WakeByAddressAll((PVOID)p);
-    }
-    template <class T>
-    struct __synchronic_native {
-        static constexpr bool value = is_pod<T>::value && (sizeof(T) <= 8);
-    };
-    typedef DWORD __synchronic_tid;
-    inline __synchronic_tid __synchronic_gettid() { return GetCurrentThreadId(); }
-
-#endif
-
+// On Linux, we make use of the kernel memory wait operations. These have been available for a long time.
 #ifdef __linux__
 
+    // These definitions merely wrap the Linux primitives for use below.
     template < class Rep, class Period>
     timespec __synchronic_to_timespec(chrono::duration<Rep, Period> const& delta) {
         struct timespec ts;
@@ -128,18 +132,48 @@ inline namespace concurrency_v2 {
     struct __synchronic_native {
         static constexpr bool value = is_integral<T>::value && (sizeof(T) == 4);
     };
+    // We make use of the native thread-id to extend memory wait operations to arbitrary-size locations.
     typedef pid_t __synchronic_tid;
-    inline __synchronic_tid __synchronic_gettid() { return syscall(SYS_gettid); }
+    #define __synchronic_gettid() (syscall(SYS_gettid))
 
-#endif
+#endif // __linux__
+    
+// On Windows, we make use of the kernel memory wait operations as well. These first became available with Windows 8.
+#if defined(WIN32) && _WIN32_WINNT >= 0x0602
 
-//    static constexpr int __magic_number_1 = 128;
-//    static constexpr int __magic_number_2 = 8;
-//    static constexpr int __magic_number_3 = 4;
-    static constexpr int __magic_number_1 = 42;
-    static constexpr int __magic_number_2 = 42;
-    static constexpr int __magic_number_3 = 6;
+    // These definitions merely wrap the Windows primitives for use below.
+    template <class V>
+    void __synchronic_wait(const void* p, V v) {
+        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),-1);
+    }
+    template <class V, class Rep, class Period>
+    void __synchronic_wait_timed(const void* p, V v, chrono::duration<Rep, Period> const& delta) {
+        WaitOnAddress((PVOID)p,(PVOID)&v,sizeof(v),chrono::duration_cast<chrono::milliseconds>(delta).count());
+    }
+    inline void __synchronic_wake_one(const void* p) {
+        WakeByAddressSingle((PVOID)p);
+    }
+    inline void __synchronic_wake_all(const void* p) {
+        WakeByAddressAll((PVOID)p);
+    }
+    template <class T>
+    struct __synchronic_native {
+        // We can apply these operations to types comparable with memcmp() that are 8B or smaller.
+        static constexpr bool value = is_pod<T>::value && (sizeof(T) <= 8);
+    };
+    // We make use of the native thread-id to extend memory wait operations to arbitrary-size locations.
+    typedef DWORD __synchronic_tid;
+    #define __synchronic_gettid() (GetCurrentThreadId())
+    
+#endif // defined(WIN32) && _WIN32_WINNT >= 0x0602
 
+    // Only the order of magnitude of these numbers really matters.
+    static constexpr int __magic_number_1 = 42;     // Poll iterations with relax.
+    static constexpr int __magic_number_2 = 42;     // Poll iterations with yield.
+    static constexpr int __magic_number_3 = 6;      // Poll iterations with exponential timed backoff (like TCP, minus the randomness).
+    static constexpr int __magic_number_4 = 2048;   // Maximum timed sleep during backoff, in microseconds.
+    
+    // A simple exponential back-off helper that is designed to cover the space between (1<<__magic_number_3) and __magic_number_4
     class __synchronic_exponential_backoff {
         int microseconds = 1 << __magic_number_3;
     public:
@@ -147,11 +181,13 @@ inline namespace concurrency_v2 {
             if(us != 0)
                  microseconds = us;
             this_thread::sleep_for(chrono::microseconds(microseconds));
+            // Avoiding the use of std::min here, to keep includes minimal
             auto next_microseconds = microseconds + (microseconds >> 2);
-            microseconds = next_microseconds < 2048 ? next_microseconds : 2048;
+            microseconds = next_microseconds < __magic_number_4 ? next_microseconds : __magic_number_4;
         }
     };
 
+    // These two helper functions implement the first 3 of the 4 phases of the back-off process. They are used in more than one place.
     template <class T>
     bool __synchronic_spin_for_change(const atomic<T>& arg, T nval, memory_order order) noexcept {
         for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
@@ -166,7 +202,6 @@ inline namespace concurrency_v2 {
 	            return true;
         return false;
     }
-
     template <class T>
     bool __synchronic_spin_for(const atomic<T>& arg, T val, memory_order order) noexcept {
         for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
@@ -181,21 +216,34 @@ inline namespace concurrency_v2 {
 	            return true;
         return false;
     }
-
+    
+// This section defines the futex-based version of synchronic base classes.
 #if defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
 
+// The macro __syn_gcc_inline applies a GCC-specific work-around to this section.
+#ifdef __GNUC__
+    //Long-term contended critical sections are 2X worse without this. It's unclear why.
+    #define __syn_gcc_inline __attribute__((always_inline))
+#else
+    #define __syn_gcc_inline
+#endif
+
+    // This class implements only the slow path, in the most optimal way. A derived class implements the fast path.
     template <class T>
     class __direct_futex_synchronic {
-        mutable atomic<int> notifying;
-        mutable atomic<int> waiting;
+        mutable atomic<int> notifying; // Used to prevent a race on destructors
+        mutable atomic<int> waiting;   // Used to optimize-out calls to the kernel futex wake api.
     public:
         __direct_futex_synchronic() : notifying(0), waiting(0) { }
-        ~__direct_futex_synchronic() { 
+        ~__direct_futex_synchronic() {
+            
+            // We need to ensure that notify functions have completed or we'll have UB by use-after-free.
             while(notifying.load(memory_order_acquire) != 0)
                 __synchronic_spin_for(notifying, 0, memory_order_relaxed);
         }
         __syn_gcc_inline void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
 
+            // We reference-count the futex wait calls in order to optimize-out the futex wake calls.
             do {
                 waiting.fetch_add(1, memory_order_acq_rel);
                 __synchronic_wait(&object, nval);
@@ -206,76 +254,103 @@ inline namespace concurrency_v2 {
         __syn_gcc_inline bool wait_for_change_for(const atomic<T>& object, T nval, 
           memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
 
+            // Ditto.
             waiting.fetch_add(1, memory_order_acq_rel);
-            __synchronic_wait_timed(&object, nval, rel_time);
+            __synchronic_wait_timed(&object, nval, rel_time); // We pass the time-out directly to the kernel.
             waiting.fetch_add(-1, memory_order_release);
+            
+            // In the timed case we exploit permission to neither account for time spent polling, nor check the kernel waited long enough.
             return object.load(order) != nval;
         }
         template <class F>
         __syn_gcc_inline void notify(atomic<T>& object, F func, bool all) {
 
+            // Prevent use-after-free.
             notifying.fetch_add(1, memory_order_acq_rel);
             try {
                 func(object);
             }
             catch (...) {
+
+                // Prevent hang while preventing use-after-free.
                 notifying.fetch_add(-1, memory_order_release);
                 throw;
             }
+            
+            // If there are no pending calls to futex wait then we don't need to call futex wake.
             if(__synchronic_expect(waiting.fetch_add(0, memory_order_acq_rel) != 0, 0)) {
                 if (all)
                     __synchronic_wake_all(&object);
                 else
                     __synchronic_wake_one(&object);
             }
+            
+            // Prevent use-after-free.
             notifying.fetch_add(-1, memory_order_release);
         }
     };
+
+    // Same as above, but for types not natively supported by the platform futex. Note the inheritance type.
     template <class T>
     class __indirect_futex_synchronic : protected __direct_futex_synchronic<__synchronic_tid> {
+        
+        // This assert is merely a reminder to the platform implementers, it is not intended to catch user bugs.
         static_assert(__synchronic_native<__synchronic_tid>::value,"Thread native handle must be a valid synchronic type for this to work.");
         typedef __direct_futex_synchronic<__synchronic_tid> base;
+        
+        // We'll use the thread id of the last writer as a proxy for the data we're watchig, on the presumption writers aren't idempotent.
         mutable atomic<__synchronic_tid> last_writer;
+        
+        static constexpr __synchronic_tid invalid_writer = -1; // I'm not sure this is correct.
     public:
-        __indirect_futex_synchronic() : last_writer(-1) { }
+        __indirect_futex_synchronic() : last_writer(invalid_writer) { }
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
 
-            last_writer.store(-1);
+            // Forget about writers that precede our read.
+            last_writer.store(invalid_writer);
             while(object.load(order) == nval) {
-                base::wait_for_change(last_writer, -1, memory_order_acquire);
-                last_writer.store(-1);
+                
+                // Wait for a new writer to arrive.
+                base::wait_for_change(last_writer, invalid_writer, memory_order_acquire);
+                last_writer.store(invalid_writer);
             }
         }
         template <class Rep, class Period>
         bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
 
-            last_writer.store(-1);
+            // Same as above.
+            last_writer.store(invalid_writer);
             if(object.load(order) != nval)
                 return true;
-            base::wait_for_change_for(last_writer, -1, memory_order_acquire, rel_time);
+            base::wait_for_change_for(last_writer, invalid_writer, memory_order_acquire, rel_time);
             return object.load(order) != nval;
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
-            int me = __synchronic_gettid();
+            
             func(object);
-            base::notify(last_writer, [me](auto& object) { object.store(me, memory_order_release); }, all);
+            base::notify(last_writer, [me](auto& object) {
+                
+                // Signal that this thread wrote a new value.
+                object.store(__synchronic_gettid(), memory_order_release);
+            }, all);
         }
     };
 
-    template <class T, class Enable = void>
-    struct __synchronic_base : protected __indirect_futex_synchronic<T> {
-    };
-
+    // The base class used for the slow path depends on whether it is directly supported or not.
     template <class T>
-    struct __synchronic_base<T, typename enable_if<__synchronic_native<T>::value>::type> : protected __direct_futex_synchronic<T> {
-    };
-
+    using __synchronic_base = typename conditional<__synchronic_native<T>::value,
+        __direct_futex_synchronic<T>, __indirect_futex_synchronic<T>>::type;
+    
+// This section defines the basic version of the synchronic base classe, for when there is no platform futex.
 #else
-
-} //namespace concurrency_v2
-} //namespace experimental
-} //namespace std
+    
+// The macro __syn_gcc_inline does not apply in this case.
+#define __syn_gcc_inline
+    
+} // namespace concurrency_v2
+} // namespace experimental
+} // namespace std
 
 #include <mutex>
 #include <condition_variable>
@@ -286,10 +361,14 @@ inline namespace concurrency_v2 {
 
     template <class T>
     class __condition_synchronic {
-        mutable atomic<int> notifying;
-        mutable atomic<int> waiting;
+        
+        // A mutex and condition variable approximates a futex.
         mutable mutex m;
         mutable condition_variable c;
+        
+        // We definitely still want to optimize-out unnecessary calls to the notify function.
+        mutable atomic<int> notifying;
+        mutable atomic<int> waiting;
     public:
         __condition_synchronic() : notifying(0), waiting(0) { }
         ~__condition_synchronic() { 
@@ -299,6 +378,7 @@ inline namespace concurrency_v2 {
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
             auto guard1 = unique_lock<mutex>(m);
             waiting.fetch_add(1);
+            // There is no need for a polling loop here because the condition variable includes one.
             c.wait(guard1, [&]() -> bool { return object.load(order) != nval; });
             waiting.fetch_add(-1);
         }
@@ -306,12 +386,16 @@ inline namespace concurrency_v2 {
         bool wait_for_change_for(const atomic<T>& object, T nval, memory_order order, chrono::duration<Rep, Period> const& rel_time) const {
             auto guard1 = unique_lock<mutex>(m);
             waiting.fetch_add(1);
+            
+            // The condition variable's definition of success is the same as our own. As in the futex case, we don't adjust or check the time.
             auto success = c.wait_for(guard1, [&]() -> bool { return object.load(order) != nval; }, rel_time) == cv_status::no_timeout;
             waiting.fetch_add(-1);
             return success;
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
+            
+            // All the optimizations we carried from the futex version result in a similar notify function body.
             notifying.fetch_add(1, memory_order_acquire);
             try {
                 func(object);
@@ -321,6 +405,8 @@ inline namespace concurrency_v2 {
                 throw;
             }
             if (__synchronic_expect(waiting.fetch_add(0) != 0, 0)) {
+                
+                // This empty critical section looks (ridiculous?) out of place but it is completely necessary.
                 {
                     unique_lock<mutex> guard2(m);
                 }
@@ -333,19 +419,24 @@ inline namespace concurrency_v2 {
         }
     };
 
+    // This class is the only base class in this case.
     template <class T>
     using __synchronic_base = __condition_synchronic<T>;
 
-#endif
+#endif //defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
 
+    // This base class' best property is that it requires no extra storage. That is sometimes valuable.
     template <class T>
     class __timed_synchronic {
+        
+        // Choosing the best steady clock we have.
         using clock = conditional<chrono::high_resolution_clock::is_steady, 
                                   chrono::high_resolution_clock, chrono::steady_clock>::type;
     public:
 
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
 
+            // Recall that this is phase 4. Some backoff already occurred in phase 3. This picks up from there automatically.
             __synchronic_exponential_backoff b;
             while (object.load(order) == nval)
                 b.sleep();
@@ -365,16 +456,18 @@ inline namespace concurrency_v2 {
         template <class F>
         void notify(atomic<T>& object, F func, bool const) {
 
+            // Another nice property of this base class is that its notify function is completely trivial.
             func(object);
         }
     };
 
     // 29.9, synchronic operations
 
+    // In this implementation we now have 3 flavors of optimizations, and those are now tied to the *type*.
     enum class synchronic_option {
-        optimize_for_short_wait,
-        optimize_for_long_wait,
-        optimize_for_size
+        optimize_for_short_wait,    // Use __synchronic_base<T> as the base class.
+        optimize_for_long_wait,     // Same, but skips phases 1 through 3 of backoff.
+        optimize_for_size           // Use __timed_synchronic<T> as the base class.
     };
 
     template <class T, synchronic_option O = synchronic_option::optimize_for_short_wait>
@@ -388,11 +481,14 @@ inline namespace concurrency_v2 {
         synchronic(synchronic&&) = delete;
         synchronic& operator=(synchronic&&) = delete;
 
+        // All the wait functions begin with the same backoff phases 1-3. Then they call the base class for phase 4.
         __syn_gcc_inline void wait(const atomic<T>& object, T desired, 
           memory_order order = memory_order_seq_cst) const {
 
             if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for(object, desired, order), 1))
                 return;
+            
+            // Desugar into the simpler base class api for phase 4.
             for (auto t = object.load(order); t != desired; t = object.load(order))
                 base::wait_for_change(object, t, memory_order_relaxed);
         }
@@ -409,18 +505,20 @@ inline namespace concurrency_v2 {
           chrono::time_point<Clock, Duration> const& abs_time, 
           memory_order order = memory_order_seq_cst) const {
 
+            // We don't implement the absolute time-outs, so we desugar into a relative time-out.
             return wait_for_change_for(object, current, abs_time - chrono::steady_clock::now());
         }
         template <class Rep, class Period>
         __syn_gcc_inline bool wait_for_change_for(const atomic<T>& object, T current, 
           chrono::duration<Rep, Period> const& rel_time, 
           memory_order order = memory_order_seq_cst) const {
-
+            
             if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for_change(object, current, order), 1))
                 return true;
             return base::wait_for_change_for(object, current, order, rel_time);
         }
-
+        
+        // All the notify functions basically convert the api into the base class api, and call that.
         __syn_gcc_inline void notify_all(atomic<T>& object, T value, 
           memory_order order = memory_order_seq_cst) {
 
@@ -431,7 +529,6 @@ inline namespace concurrency_v2 {
 
             base::notify(object, std::forward<F>(func), true);
         }
-
         __syn_gcc_inline void notify_one(atomic<T>& object, T value, 
           memory_order order = memory_order_seq_cst) {
 
@@ -443,9 +540,10 @@ inline namespace concurrency_v2 {
             base::notify(object, std::forward<F>(func), false);
         }
     };
-} //namespace concurrency_v2
-} //namespace experimental
-} //namespace std
+    
+} // namespace concurrency_v2
+} // namespace experimental
+} // namespace std
 
-#endif //__SYNCHRONIC
+#endif // __SYNCHRONIC
 
