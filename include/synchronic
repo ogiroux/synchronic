@@ -329,7 +329,7 @@ inline namespace concurrency_v2 {
         void notify(atomic<T>& object, F func, bool const all) {
             
             func(object);
-            base::notify(last_writer, [me](auto& object) {
+            base::notify(last_writer, [](auto& object) {
                 
                 // Signal that this thread wrote a new value.
                 object.store(__synchronic_gettid(), memory_order_release);
