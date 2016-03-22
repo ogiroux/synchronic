@@ -170,7 +170,7 @@ inline namespace concurrency_v2 {
     // Only the order of magnitude of these numbers really matters.
     static constexpr int __magic_number_1 = 42;     // Poll iterations with relax.
     static constexpr int __magic_number_2 = 42;     // Poll iterations with yield.
-    static constexpr int __magic_number_3 = 6;      // Poll iterations with exponential timed backoff (like TCP, minus the randomness).
+    static constexpr int __magic_number_3 = 8;      // Poll iterations with exponential timed backoff (like TCP, minus the randomness).
     static constexpr int __magic_number_4 = 2048;   // Maximum timed sleep during backoff, in microseconds.
     
     // A simple exponential back-off helper that is designed to cover the space between (1<<__magic_number_3) and __magic_number_4
