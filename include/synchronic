@@ -468,15 +468,40 @@ inline namespace concurrency_v2 {
     // 29.9, synchronic operations
 
     // In this implementation we now have 3 flavors of optimizations, and those are now tied to the *type*.
-    enum class synchronic_option {
-        optimize_for_short_wait,    // Use __synchronic_base<T> as the base class.
-        optimize_for_long_wait,     // Same, but skips phases 1 through 3 of backoff.
-        optimize_for_size           // Use __timed_synchronic<T> as the base class.
+    enum class synchronic_type {
+        optimized_for_short_wait,    // Use __synchronic_base<T> as the base class.
+        optimized_for_long_wait,     // Same, but skips phases 1 through 3 of backoff.
+        optimized_for_space          // Use __timed_synchronic<T> as the base class.
+    };
+    template <class T, synchronic_type O>
+    class __synchronic_quick_base {
+    public:
+        static inline bool try_wait_for_change(const atomic<T>& arg, T nval, memory_order order) noexcept {
+            return __synchronic_spin_for_change(arg, nval, order);
+        }
+        static inline bool try_wait(const atomic<T>& arg, T val, memory_order order) noexcept {
+            return __synchronic_spin_for(arg, val, order);
+        }
+    };
+    template <class T>
+    class __synchronic_quick_base<T, synchronic_type::optimized_for_long_wait> {
+    public:
+        static inline bool try_wait_for_change(const atomic<T>& arg, T nval, memory_order order) noexcept {
+            return false;
+        }
+        static inline bool try_wait(const atomic<T>& arg, T val, memory_order order) noexcept {
+            return false;
+        }
     };
 
-    template <class T, synchronic_option O = synchronic_option::optimize_for_short_wait>
-    class synchronic : protected conditional<O == synchronic_option::optimize_for_size,__timed_synchronic<T>,__synchronic_base<T>>::type {
-        typedef typename conditional<O == synchronic_option::optimize_for_size,__timed_synchronic<T>,__synchronic_base<T>>::type base;
+    // This class is the only base class in this case.
+    template <class T, synchronic_type O>
+    using __synchronic_actual_base = typename conditional<O == synchronic_type::optimized_for_space,__timed_synchronic<T>,__synchronic_base<T>>::type;
+
+    template <class T, synchronic_type O = synchronic_type::optimized_for_short_wait>
+    class synchronic : protected __synchronic_actual_base<T, O>, __synchronic_quick_base<T, O> {
+        typedef __synchronic_actual_base<T, O> base;
+        typedef __synchronic_quick_base<T, O> qbase;
     public:
         synchronic() = default;
         ~synchronic() = default;
@@ -489,7 +514,7 @@ inline namespace concurrency_v2 {
         __syn_gcc_inline void wait(const atomic<T>& object, T desired, 
           memory_order order = memory_order_seq_cst) const {
 
-            if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for(object, desired, order), 1))
+            if (__synchronic_expect(qbase::try_wait(object, desired, order), 1))
                 return;
             
             // Desugar into the simpler base class api for phase 4.
@@ -499,7 +524,7 @@ inline namespace concurrency_v2 {
         __syn_gcc_inline void wait_for_change(const atomic<T>& object, T current, 
           memory_order order = memory_order_seq_cst) const {
 
-            if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for_change(object, current, order), 1))
+            if (__synchronic_expect(qbase::try_wait_for_change(object, current, order), 1))
                 return;
             base::wait_for_change(object, current, order);
         }
@@ -517,7 +542,7 @@ inline namespace concurrency_v2 {
           chrono::duration<Rep, Period> const& rel_time, 
           memory_order order = memory_order_seq_cst) const {
             
-            if (__synchronic_expect(O == synchronic_option::optimize_for_short_wait && __synchronic_spin_for_change(object, current, order), 1))
+            if (__synchronic_expect(qbase::try_wait_for_change(object, current, order), 1))
                 return true;
             return base::wait_for_change_for(object, current, order, rel_time);
         }
@@ -550,4 +575,3 @@ inline namespace concurrency_v2 {
 } // namespace std
 
 #endif // __SYNCHRONIC
-
