@@ -377,29 +377,20 @@ inline namespace concurrency_v2 {
 
         // We definitely still want to optimize-out unnecessary calls to the notify function.
         mutable atomic<int> waiting;
+        mutable atomic<int> notifying;
         mutable atomic<bool> notify_lock;
 
         static constexpr bool Unlocked = false, Locked = true;
 
-        template <class F>
-        void do_under_notify_lock(F const& f) const {
-            while (notify_lock.exchange(Locked, memory_order_acquire) == Locked)
-                __synchronic_relax();
-            try {
-                f();
-            }
-            catch (...) {
-                notify_lock.store(Unlocked, memory_order_release);
-                throw;
-            }
-            notify_lock.store(Unlocked, memory_order_release);
-        }
     public:
-        __condition_synchronic() : waiting(0), notify_lock(Unlocked) { }
+        __condition_synchronic() : waiting(0), notifying(0), notify_lock(Unlocked) { }
         ~__condition_synchronic() {
-            do_under_notify_lock([&]() {
-                assert(waiting.load(memory_order_relaxed) == 0);
-            });
+
+            // We need to ensure that notify functions have completed or we'll have UB by use-after-free.
+            while (notify_lock.load(memory_order_acquire) != Unlocked)
+                __synchronic_relax();
+            while (notifying.load(memory_order_acquire))
+                __synchronic_relax();
         }
         void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
             // There is no need for a polling loop here because the condition variable includes one.
@@ -418,10 +409,15 @@ inline namespace concurrency_v2 {
         }
         template <class F>
         void notify(atomic<T>& object, F func, bool const all) {
-            do_under_notify_lock([&]() {
+
+
+            while (notify_lock.exchange(Locked, memory_order_acquire) != Unlocked)
+                __synchronic_relax();
+            try {
                 func(object);
-                if (__synchronic_expect(waiting.load(memory_order_relaxed) != 0, 0)) {
-                    // This empty critical section looks (ridiculous?) out of place but it is completely necessary.
+                if (__synchronic_expect(waiting.load(memory_order_acquire) != 0, 0)) {
+                    waiting.fetch_add(1, memory_order_acquire);
+                    notify_lock.store(Unlocked, memory_order_release);
                     {
                         auto guard = unique_lock<mutex>(m);
                     }
@@ -429,8 +425,15 @@ inline namespace concurrency_v2 {
                         c.notify_all();
                     else
                         c.notify_one();
+                    waiting.fetch_add(-1, memory_order_release);
                 }
-            });
+                else
+                    notify_lock.store(Unlocked, memory_order_release);
+            }
+            catch (...) {
+                notify_lock.store(Unlocked, memory_order_release);
+                throw;
+            }
         }
     };
 
