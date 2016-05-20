@@ -169,8 +169,8 @@ inline namespace concurrency_v2 {
 #endif // defined(WIN32) && _WIN32_WINNT >= 0x0602
 
     // Only the order of magnitude of these numbers really matters.
-    static constexpr int __magic_number_1 = 32;    // Poll iterations with relax. (Cost model: ~10ns.)
-    static constexpr int __magic_number_2 = 32;     // Poll iterations with yield. (Cost model: ~1us.)
+    static constexpr int __magic_number_1 = 128;    // Poll iterations with relax. (Cost model: ~10ns.)
+    static constexpr int __magic_number_2 = 64;     // Poll iterations with yield. (Cost model: ~1us.)
 #ifndef WIN32
     static constexpr int __magic_number_3 = 32;    // Greatest power-of-two to sleep for, in the timed backoff portion.
 #else

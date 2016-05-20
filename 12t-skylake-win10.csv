@@ -1,11 +1,11 @@
 name, threads, steps, time, expected, real/expected, cpu/expected, user/cpu, system/cpu
-"std::mutex uncontended 1-thread",1,190104791,1.00005e+10,52.4929,1.00214,1.00209,1,0
-"ttas_mutex uncontended 1-thread",1,190353098,1.00004e+10,52.4929,1.00082,1.00078,1,0
-"std::mutex uncontended N-thread",12,384091100,1.00509e+10,18.9931,1.37776,16.126,0.999867,0.00013282
-"ttas_mutex uncontended N-thread",12,475394418,1.00429e+10,18.9931,1.11227,13.0254,1,0
-"std::mutex low-prob contended N-thread",12,318650104,1.00041e+10,18.9931,1.65299,19.3035,0.999599,0.00040123
-"ttas_mutex low-prob contended N-thread",12,311582370,1.00002e+10,18.9931,1.68982,14.3579,0.999081,0.000919456
-"std::mutex short contended N-thread",12,10430396,1.00179e+10,522.772,1.83722,21.5632,0.999867,0.00013289
-"ttas_mutex short contended N-thread",12,12846636,1.00015e+10,522.772,1.48924,4.97191,0.974263,0.025737
-"std::mutex long contended N-thread",12,1027,1.00007e+10,9.98044e+06,0.975688,0.978667,0.998442,0.00155763
-"ttas_mutex long contended N-thread",12,1024,1.00001e+10,9.98044e+06,0.978485,0.981534,1,0
+"std::mutex uncontended 1-thread",1,207422589,1.00009e+10,47.6391,1.01209,0.991443,1,0
+"ttas_mutex uncontended 1-thread",1,207848591,1.00004e+10,47.6391,1.00996,0.975209,1,0
+"std::mutex uncontended N-thread",12,296294229,1.00918e+10,29.4693,1.15578,13.4819,1,0
+"ttas_mutex uncontended N-thread",12,291739370,1.01032e+10,29.4693,1.17515,13.7233,0.999868,0.000132433
+"std::mutex low-prob contended N-thread",12,237932971,1.00114e+10,29.4693,1.42781,16.2028,0.999312,0.000687663
+"ttas_mutex low-prob contended N-thread",12,247690924,1.00004e+10,29.4693,1.37005,10.9578,0.999219,0.000781403
+"std::mutex short contended N-thread",12,18378041,1.00054e+10,311.846,1.7458,20.0986,0.999864,0.000135648
+"ttas_mutex short contended N-thread",12,22804890,1e+10,311.846,1.40616,6.20904,0.872965,0.127035
+"std::mutex long contended N-thread",12,1061,1.00009e+10,9.65287e+06,0.976494,0.964196,1,0
+"ttas_mutex long contended N-thread",12,1070,1.00003e+10,9.65287e+06,0.968222,0.969701,1,0
