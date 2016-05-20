@@ -1,11 +1,11 @@
 name, threads, steps, time, expected, real/expected, cpu/expected, user/cpu, system/cpu
-"std::mutex uncontended 1-thread",1,166100608,1.00003e+10,68.9289,0.873457,0.873429,1,0
-"ttas_mutex uncontended 1-thread",1,165222599,1.00006e+10,68.9289,0.878126,0.878071,1,0
-"std::mutex uncontended N-thread",8,244095639,1.00005e+10,33.0709,1.23884,9.66123,0.980639,0.0193615
-"ttas_mutex uncontended N-thread",8,311328744,1.00001e+10,33.0709,0.971268,7.58649,0.98118,0.0188196
-"std::mutex low-prob contended N-thread",8,192047157,1.00003e+10,33.0709,1.57456,9.45494,0.650624,0.349376
-"ttas_mutex low-prob contended N-thread",8,194086521,1.00002e+10,33.0709,1.558,10.6503,0.797689,0.202311
-"std::mutex short contended N-thread",8,3895832,1.00022e+10,308.276,8.32826,45.0628,0.0397265,0.960273
-"ttas_mutex short contended N-thread",8,18430302,1.0001e+10,308.276,1.76024,10.2365,0.52132,0.47868
-"std::mutex long contended N-thread",8,1048,1.00001e+10,9.46152e+06,1.00852,1.02666,1,0
-"ttas_mutex long contended N-thread",8,1041,1.00003e+10,9.46152e+06,1.01532,1.04574,1,0
+"std::mutex uncontended 1-thread",1,155988600,1.00024e+10,64.582,0.992891,0.992649,1,0
+"ttas_mutex uncontended 1-thread",1,158301816,1.00013e+10,64.582,0.978267,0.978144,1,0
+"std::mutex uncontended N-thread",8,244230691,1.0015e+10,33.7752,1.21409,9.49334,0.964755,0.0352445
+"ttas_mutex uncontended N-thread",8,277402308,1.00002e+10,33.7752,1.06733,8.39015,0.972395,0.0276046
+"std::mutex low-prob contended N-thread",8,183663423,1.00009e+10,33.7752,1.61219,10.0092,0.726687,0.273313
+"ttas_mutex low-prob contended N-thread",8,196431542,1.00037e+10,33.7752,1.50783,10.5705,0.777984,0.222016
+"std::mutex short contended N-thread",8,3685670,1.00001e+10,306.674,8.84728,48.35,0.0444648,0.955535
+"ttas_mutex short contended N-thread",8,17828400,1.00022e+10,306.674,1.82939,11.2153,0.498206,0.501794
+"std::mutex long contended N-thread",8,1049,1.00017e+10,9.49073e+06,1.00461,1.02353,1,0
+"ttas_mutex long contended N-thread",8,1055,1.00009e+10,9.49073e+06,0.998819,1.0197,1,0
