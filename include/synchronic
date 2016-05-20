@@ -281,13 +281,13 @@ inline namespace concurrency_v2 {
             try {
                 func(object);
                 if (__synchronic_expect(waiting.load(memory_order_acquire) != 0, 0)) {
-                    waiting.fetch_add(1, memory_order_acquire);
+                    notifying.fetch_add(1, memory_order_acquire);
                     notify_lock.store(Unlocked, memory_order_release);
                     if (all)
                         __synchronic_wake_all(&object);
                     else
                         __synchronic_wake_one(&object);
-                    waiting.fetch_add(-1, memory_order_release);
+                    notifying.fetch_add(-1, memory_order_release);
                 }
                 else
                     notify_lock.store(Unlocked, memory_order_release);
@@ -416,7 +416,7 @@ inline namespace concurrency_v2 {
             try {
                 func(object);
                 if (__synchronic_expect(waiting.load(memory_order_acquire) != 0, 0)) {
-                    waiting.fetch_add(1, memory_order_acquire);
+                    notifying.fetch_add(1, memory_order_acquire);
                     notify_lock.store(Unlocked, memory_order_release);
                     {
                         auto guard = unique_lock<mutex>(m);
@@ -425,7 +425,7 @@ inline namespace concurrency_v2 {
                         c.notify_all();
                     else
                         c.notify_one();
-                    waiting.fetch_add(-1, memory_order_release);
+                    notifying.fetch_add(-1, memory_order_release);
                 }
                 else
                     notify_lock.store(Unlocked, memory_order_release);
