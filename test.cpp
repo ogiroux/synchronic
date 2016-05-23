@@ -27,7 +27,7 @@
  */
 
 #ifdef WIN32
-#define _WIN32_WINNT 0x0602
+#define _WIN32_WINNT 0x0601
 #endif
 
 #include "test.hpp"
@@ -129,7 +129,7 @@ double system_time_consumed(cpu_time start, cpu_time end) {
 void set_affinity(std::uint64_t cpu) {
     
     cpu %= sizeof(std::uint64_t) * 8;
-    SetThreadAffinityMask(GetCurrentThread(), 1 << cpu);
+    SetThreadAffinityMask(GetCurrentThread(), int(1 << cpu));
 }
 #endif
 

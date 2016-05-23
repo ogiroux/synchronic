@@ -1,11 +1,13 @@
 name, threads, steps, time, expected, real/expected, cpu/expected, user/cpu, system/cpu
-"std::mutex uncontended 1-thread",1,191779913,1.00309e+10,50.2869,1.04012,0.970485,1,0
-"ttas_mutex uncontended 1-thread",1,191295429,1.00312e+10,50.2869,1.04278,0.992434,1,0
-"std::mutex uncontended N-thread",1,126586434,1.00179e+10,50.3578,1.57152,1.49519,1,0
-"ttas_mutex uncontended N-thread",1,134921123,1.00302e+10,50.3578,1.47626,1.39133,1,0
-"std::mutex low-prob contended N-thread",1,115306668,1.00204e+10,50.3578,1.7257,1.628,1,0
-"ttas_mutex low-prob contended N-thread",1,127010187,1.00318e+10,50.3578,1.56846,1.46577,1,0
-"std::mutex short contended N-thread",1,41128546,1.0025e+10,195.49,1.24685,1.18156,1,0
-"ttas_mutex short contended N-thread",1,47083330,1.00206e+10,195.49,1.08868,1.02194,1,0
-"std::mutex long contended N-thread",1,1041,1.00292e+10,9.69936e+06,0.993285,0.934681,1,0
-"ttas_mutex long contended N-thread",1,1035,1.00338e+10,9.69936e+06,0.999501,0.938543,1,0
+"std::mutex single-threaded",1,185633862,1.00241e+10,52.2307,1.03386,0.970137,1,0
+"ttas_mutex single-threaded",1,186477130,1.00346e+10,52.2307,1.03026,0.954521,1,0
+"std::mutex no contention",1,125121218,1.00282e+10,51.2813,1.5629,1.4611,1,0
+"ttas_mutex no contention",1,137860476,1.00388e+10,51.2813,1.41998,1.31504,1,0
+"std::mutex rare contention",1,113669275,1.00245e+10,51.2813,1.71974,1.60831,1,0
+"ttas_mutex rare contention",1,125827260,1.00208e+10,51.2813,1.55299,1.46744,0.99835,0.00165017
+"std::mutex shortest sections",1,236806759,1.00268e+10,6.41016,6.60542,6.14513,1,0
+"ttas_mutex shortest sections",1,239095806,1.00343e+10,6.41016,6.54707,6.21883,1,0
+"std::mutex short sections",1,42169619,1.0027e+10,198.715,1.19657,1.12623,1,0
+"ttas_mutex short sections",1,44759651,1.00025e+10,198.715,1.12459,1.01714,1,0
+"std::mutex long sections",1,1063,1.00056e+10,1e+07,0.941262,0.896637,1,0
+"ttas_mutex long sections",1,1061,1.0038e+10,1e+07,0.946088,0.895382,1,0
