@@ -6,22 +6,22 @@ All rights reserved.
 Redistribution and use in source and binary forms, with or without modification,
 are permitted provided that the following conditions are met:
 
-1. Redistributions of source code must retain the above copyright notice, this 
+1. Redistributions of source code must retain the above copyright notice, this
 list of conditions and the following disclaimer.
 
-2. Redistributions in binary form must reproduce the above copyright notice, 
-this list of conditions and the following disclaimer in the documentation 
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
 and/or other materials provided with the distribution.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. 
-IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, 
-INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, 
-BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, 
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
-LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE 
-OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED 
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
@@ -38,27 +38,27 @@ struct dumb_mutex {
     dumb_mutex() : locked(false) {
     }
 
-	dumb_mutex(const dumb_mutex&) = delete;
-	dumb_mutex& operator=(const dumb_mutex&) = delete;
+    dumb_mutex(const dumb_mutex&) = delete;
+    dumb_mutex& operator=(const dumb_mutex&) = delete;
 
     void lock() {
 
-        while(1) {
+        while (1) {
             bool state = false;
-            if(locked.compare_exchange_weak(state,true,std::memory_order_acquire))
+            if (locked.compare_exchange_weak(state, true, std::memory_order_acquire))
                 return;
-            while(locked.load(std::memory_order_relaxed))
-                if(!truly)
+            while (locked.load(std::memory_order_relaxed))
+                if (!truly)
                     std::this_thread::yield();
         };
     }
 
     void unlock() {
 
-        locked.store(false,std::memory_order_release);
+        locked.store(false, std::memory_order_release);
     }
 
-private :
+private:
     std::atomic<bool> locked;
 };
 
@@ -67,7 +67,7 @@ private :
 #include <synchapi.h>
 struct srw_mutex {
 
-    srw_mutex () {
+    srw_mutex() {
         InitializeSRWLock(&_lock);
     }
 
@@ -78,7 +78,7 @@ struct srw_mutex {
         ReleaseSRWLockExclusive(&_lock);
     }
 
-private :
+private:
     SRWLOCK _lock;
 };
 #endif
@@ -96,13 +96,13 @@ public:
         int value1 = 0;
         if (word.compare_exchange_strong(value1, 1, std::memory_order_acquire, std::memory_order_relaxed))
             return; // success
-        // wasn't zero -- somebody held the lock
+                    // wasn't zero -- somebody held the lock
         do {
             int value2 = 1;
             // assume lock is still taken, try to make it 2 and wait
             if (value1 == 2 || word.compare_exchange_strong(value2, 2, std::memory_order_acquire, std::memory_order_relaxed))
                 // let's wait, but only if the value is still 2
-                std::experimental::__synchronic_wait(&word, 2);    
+                std::experimental::__synchronic_wait(&word, 2);
             // try (again) assuming the lock is free
             value1 = 0;
         } while (!word.compare_exchange_strong(value1, 2, std::memory_order_acquire, std::memory_order_relaxed));
@@ -110,8 +110,8 @@ public:
     }
     void unlock() {
         if (word.fetch_add(-1, std::memory_order_release) != 1) {
-             word.store(0, std::memory_order_release);
-             std::experimental::__synchronic_wake_one(&word);
+            word.store(0, std::memory_order_release);
+            std::experimental::__synchronic_wake_one(&word);
         }
     }
 };
@@ -119,11 +119,11 @@ public:
 #endif
 
 struct alignas(64) ttas_mutex {
-    ttas_mutex() :  locked(0) { }
-	ttas_mutex(const ttas_mutex&) = delete;
-	ttas_mutex& operator=(const ttas_mutex&) = delete;
+    ttas_mutex() : locked(0) { }
+    ttas_mutex(const ttas_mutex&) = delete;
+    ttas_mutex& operator=(const ttas_mutex&) = delete;
     void lock() {
-        while(1) {
+        while (1) {
             int state = 0;
             if (locked.compare_exchange_weak(state, 1, std::memory_order_acquire))
                 return;
@@ -133,18 +133,18 @@ struct alignas(64) ttas_mutex {
     void unlock() {
         sync.notify_one(locked, 0, std::memory_order_release);
     }
-private :
+private:
     std::atomic<int> locked;
     std::experimental::synchronic<int> sync;
 };
 
 struct ticket_mutex {
-    
+
     ticket_mutex() : active(0), queue(0) {
     }
 
-	ticket_mutex(const ticket_mutex&) = delete;
-	ticket_mutex& operator=(const ticket_mutex&) = delete;
+    ticket_mutex(const ticket_mutex&) = delete;
+    ticket_mutex& operator=(const ticket_mutex&) = delete;
 
     void lock() {
 
@@ -158,41 +158,41 @@ struct ticket_mutex {
             atom.fetch_add(1, std::memory_order_release);
         });
     }
-private :
+private:
     std::atomic<int> active, queue;
     std::experimental::synchronic<int> sync;
 };
 
 struct mcs_mutex {
-    
+
     mcs_mutex() : head(nullptr) {
     }
 
-	mcs_mutex(const mcs_mutex&) = delete;
-	mcs_mutex& operator=(const mcs_mutex&) = delete;
+    mcs_mutex(const mcs_mutex&) = delete;
+    mcs_mutex& operator=(const mcs_mutex&) = delete;
 
     struct unique_lock {
 
         unique_lock(mcs_mutex & m) : m(m), next(nullptr), ready(false) {
 
-            unique_lock * const head = m.head.exchange(this,std::memory_order_acquire);
-            if(head != nullptr) {
-                
+            unique_lock * const head = m.head.exchange(this, std::memory_order_acquire);
+            if (head != nullptr) {
+
                 head->sync_next.notify_one(head->next, this);
                 sync_ready.wait(ready, true);
             }
         }
-        
-	    unique_lock(const unique_lock&) = delete;
-	    unique_lock& operator=(const unique_lock&) = delete;
+
+        unique_lock(const unique_lock&) = delete;
+        unique_lock& operator=(const unique_lock&) = delete;
 
         ~unique_lock() {
 
             unique_lock * head = this;
-            if(!m.head.compare_exchange_strong(head,nullptr,std::memory_order_release, std::memory_order_relaxed)) {
+            if (!m.head.compare_exchange_strong(head, nullptr, std::memory_order_release, std::memory_order_relaxed)) {
 
                 unique_lock * n = next.load(std::memory_order_acquire);
-                if(n == nullptr) {
+                if (n == nullptr) {
 
                     sync_next.wait_for_change(next, nullptr, std::memory_order_acquire);
                 }
@@ -208,7 +208,7 @@ struct mcs_mutex {
         std::experimental::synchronic<bool> sync_ready;
     };
 
-private :
+private:
     std::atomic<unique_lock*> head;
 };
 
@@ -217,9 +217,60 @@ namespace std {
     struct unique_lock<mcs_mutex> : mcs_mutex::unique_lock {
         unique_lock(mcs_mutex & m) : mcs_mutex::unique_lock(m) {
         }
-	    unique_lock(const unique_lock&) = delete;
-	    unique_lock& operator=(const unique_lock&) = delete;
+        unique_lock(const unique_lock&) = delete;
+        unique_lock& operator=(const unique_lock&) = delete;
     };
 }
+
+class webkit_mutex {
+public:
+    enum State : std::uint8_t {
+        Unlocked = 0,
+        Locked = 1,
+        Waiting = 2,
+        LockedAndWaiting = 3
+    };
+
+    webkit_mutex() : m_state(Unlocked) {
+    }
+
+    void lock()
+    {
+        State s = Unlocked;
+        if (__synchronic_expect(m_state.compare_exchange_weak(s, Locked, std::memory_order_acquire), 1))
+            return;
+
+        lock_slow();
+    }
+
+    void lock_slow() {
+
+        while (1) {
+            State s = Unlocked;
+            if (m_state.compare_exchange_weak(s, Locked, std::memory_order_acquire))
+                return;
+            if (s == LockedAndWaiting || m_state.compare_exchange_weak(s, LockedAndWaiting, std::memory_order_relaxed))
+                sync.wait(m_state, Unlocked, std::memory_order_relaxed);
+        }
+    }
+
+    void unlock()
+    {
+        State s = Locked;
+        if (__synchronic_expect(m_state.compare_exchange_weak(s, Unlocked, std::memory_order_release), 1))
+            return;
+
+        unlock_slow();
+    }
+
+    void unlock_slow() {
+
+        sync.notify_one(m_state, Unlocked, std::memory_order_release);
+    }
+
+private:
+    std::atomic<State> m_state;
+    std::experimental::synchronic<State> sync;
+};
 
 #endif //TEST_HPP

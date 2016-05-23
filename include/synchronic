@@ -195,9 +195,11 @@ inline namespace concurrency_v2 {
     // These two helper functions implement the first 3 of the 4 phases of the back-off process. They are used in more than one place.
     template <class T>
     bool __synchronic_spin_for_change(const atomic<T>& arg, T nval, memory_order order) noexcept {
+#if !defined(__APPLE__) && !defined(WIN32)
         for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
             if (__synchronic_expect(arg.load(order) != nval, 1))
                 return true;
+#endif
         for (int i = 0; i < __magic_number_2; __synchronic_yield(), ++i)
             if (__synchronic_expect(arg.load(order) != nval, 1))
                 return true;
@@ -209,9 +211,11 @@ inline namespace concurrency_v2 {
     }
     template <class T>
     bool __synchronic_spin_for(const atomic<T>& arg, T val, memory_order order) noexcept {
+#if !defined(__APPLE__) && !defined(WIN32)
         for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
             if (__synchronic_expect(arg.load(order) == val, 1))
                 return true;
+#endif
         for (int i = 0; i < __magic_number_2; __synchronic_yield(), ++i)
             if (arg.load(order) == val)
                 return true;
@@ -222,12 +226,13 @@ inline namespace concurrency_v2 {
         return false;
     }
 
-            // This section defines the futex-based version of synchronic base classes.
+// This section defines the futex-based version of synchronic base classes.
 #if defined(__linux__) || (defined(WIN32) && _WIN32_WINNT >= 0x0602)
 
-            // The macro __syn_gcc_inline applies a GCC-specific work-around to this section.
+// The macro __syn_gcc_inline applies a GCC-specific work-around to this section.
 #ifdef __GNUC__
-            //Long-term contended critical sections are 2X worse without this. It's unclear why.
+
+//Long-term contended critical sections are 2X worse without this. It's unclear why.
 #define __syn_gcc_inline __attribute__((always_inline))
 #else
 #define __syn_gcc_inline
@@ -248,9 +253,9 @@ inline namespace concurrency_v2 {
 
             // We need to ensure that notify functions have completed or we'll have UB by use-after-free.
             while (notify_lock.load(memory_order_acquire) != Unlocked)
-               __synchronic_relax();
+                __synchronic_relax();
             while (notifying.load(memory_order_acquire))
-               __synchronic_relax();
+                __synchronic_relax();
         }
         __syn_gcc_inline void wait_for_change(const atomic<T>& object, T nval, memory_order order) const {
 
@@ -277,7 +282,7 @@ inline namespace concurrency_v2 {
         __syn_gcc_inline void notify(atomic<T>& object, F func, bool all) {
 
             while (notify_lock.exchange(Locked, memory_order_acquire) != Unlocked)
-               __synchronic_relax();
+                __synchronic_relax();
             try {
                 func(object);
                 if (__synchronic_expect(waiting.load(memory_order_acquire) != 0, 0)) {
@@ -351,10 +356,10 @@ inline namespace concurrency_v2 {
     using __synchronic_base = typename conditional<__synchronic_native<T>::value,
         __direct_futex_synchronic<T>, __indirect_futex_synchronic<T>>::type;
 
-            // This section defines the basic version of the synchronic base classe, for when there is no platform futex.
+    // This section defines the basic version of the synchronic base classe, for when there is no platform futex.
 #else
 
-            // The macro __syn_gcc_inline does not apply in this case.
+    // The macro __syn_gcc_inline does not apply in this case.
 #define __syn_gcc_inline
 
 } // namespace concurrency_v2
@@ -523,11 +528,22 @@ inline namespace concurrency_v2 {
         synchronic(synchronic&&) = delete;
         synchronic& operator=(synchronic&&) = delete;
 
+        __syn_gcc_inline bool try_wait(const atomic<T>& object, T desired,
+            memory_order order = memory_order_seq_cst) const {
+
+            return qbase::try_wait(object, desired, order);
+        }
+        __syn_gcc_inline bool try_wait_for_change(const atomic<T>& object, T current,
+            memory_order order = memory_order_seq_cst) const {
+
+            return qbase::try_wait_for_change(object, current, order);
+        }
+
         // All the wait functions begin with the same backoff phases 1-3. Then they call the base class for phase 4.
         __syn_gcc_inline void wait(const atomic<T>& object, T desired,
             memory_order order = memory_order_seq_cst) const {
 
-            if (__synchronic_expect(qbase::try_wait(object, desired, order), 1))
+            if (__synchronic_expect(try_wait(object, desired, order), 1))
                 return;
 
             // Desugar into the simpler base class api for phase 4.
@@ -537,7 +553,7 @@ inline namespace concurrency_v2 {
         __syn_gcc_inline void wait_for_change(const atomic<T>& object, T current,
             memory_order order = memory_order_seq_cst) const {
 
-            if (__synchronic_expect(qbase::try_wait_for_change(object, current, order), 1))
+            if (__synchronic_expect(try_wait_for_change(object, current, order), 1))
                 return;
             base::wait_for_change(object, current, order);
         }

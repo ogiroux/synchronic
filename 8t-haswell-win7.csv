@@ -1,13 +1,19 @@
 name, threads, steps, time, expected, real/expected, cpu/expected, user/cpu, system/cpu
-"std::mutex single-threaded",1,183453231,1.00177e+10,54.2694,1.00621,0.9495,1,0
-"ttas_mutex single-threaded",1,182638678,1.00264e+10,54.2694,1.01157,0.952158,1,0
-"std::mutex no contention",1,122957741,1.00381e+10,53.4305,1.52793,1.45555,1,0
-"ttas_mutex no contention",1,130436834,1.00092e+10,53.4305,1.43618,1.34743,1,0
-"std::mutex rare contention",1,113563303,1.00231e+10,53.4305,1.65186,1.55278,1,0
-"ttas_mutex rare contention",1,122919007,1.00132e+10,53.4305,1.52464,1.44411,1,0
-"std::mutex shortest sections",1,245108743,1.00062e+10,5.93672,6.87642,6.52857,1,0
-"ttas_mutex shortest sections",1,245740732,1.00237e+10,5.93672,6.87077,6.45823,1,0
-"std::mutex short sections",1,42184480,1.00298e+10,195.912,1.21361,1.14572,1,0
-"ttas_mutex short sections",1,47507616,1.00088e+10,195.912,1.07537,1.00727,1,0
-"std::mutex long sections",1,1078,1.00182e+10,9.99999e+06,0.929337,0.869667,1,0
-"ttas_mutex long sections",1,1091,1.00414e+10,9.99999e+06,0.920382,0.879354,1,0
+"std::mutex single-threaded",1,80083146,4.02472e+09,56.8684,0.883737,0.782244,1,0
+"ttas_mutex single-threaded",1,79346592,4.02809e+09,56.8684,0.892688,0.789506,1,0
+"webkit_mutex single-threaded",1,77612376,4.02273e+09,56.8684,0.911421,0.800067,1,0
+"std::mutex no contention",1,47118500,4.00177e+09,49.7588,1.70683,1.54613,1,0
+"ttas_mutex no contention",1,51650335,4.03101e+09,49.7588,1.56845,1.41655,1,0
+"webkit_mutex no contention",1,63517272,4.02401e+09,49.7588,1.2732,1.16179,1,0
+"std::mutex rare contention",1,44551262,4.02903e+09,49.7588,1.81748,1.65637,1,0
+"ttas_mutex rare contention",1,48309095,4.03095e+09,49.7588,1.67691,1.54053,1,0
+"webkit_mutex rare contention",1,57999447,4.01497e+09,49.7588,1.3912,1.25066,1,0
+"std::mutex shortest sections",1,93357119,4.01736e+09,6.21985,6.91852,6.37736,1,0
+"ttas_mutex shortest sections",1,91950229,4.00932e+09,6.21985,7.01032,6.4203,1,0
+"webkit_mutex shortest sections",1,163495354,4.01571e+09,6.21985,3.94891,3.5186,1,0
+"std::mutex short sections",1,16032239,4.0021e+09,199.035,1.25419,1.12132,1,0
+"ttas_mutex short sections",1,16410166,4.04115e+09,199.035,1.23726,1.08593,1,0
+"webkit_mutex short sections",1,18093016,4.03995e+09,199.035,1.12185,0.98059,1,0
+"std::mutex long sections",1,455,4.04585e+09,1e+07,0.889198,0.807006,1,0
+"ttas_mutex long sections",1,441,4.03134e+09,1e+07,0.914135,0.814909,1,0
+"webkit_mutex long sections",1,444,4.01922e+09,1e+07,0.90523,0.82348,1,0
