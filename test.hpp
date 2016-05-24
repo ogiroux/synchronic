@@ -221,35 +221,45 @@ namespace std {
         unique_lock& operator=(const unique_lock&) = delete;
     };
 }
-
+/*
 class webkit_mutex {
 public:
     enum State : std::uint8_t {
-        Unlocked = 0,
-        Locked = 1,
-        Waiting = 2,
-        LockedAndWaiting = 3
+        Unlocked,
+        Blocked,
+        Locked,
+        LockedAndBlocked
     };
 
     webkit_mutex() : m_state(Unlocked) {
     }
+    
+    bool try_lock() {
+        State s = Unlocked;
+        if (__synchronic_expect(m_state.compare_exchange_strong(s, Locked, std::memory_order_acquire), 1))
+            return true;
+        if (s == Blocked &&
+            __synchronic_expect(m_state.compare_exchange_strong(s, LockedAndBlocked, std::memory_order_acquire), 1))
+            return true;
+        return false;
+    }
 
     void lock()
     {
-        State s = Unlocked;
-        if (__synchronic_expect(m_state.compare_exchange_weak(s, Locked, std::memory_order_acquire), 1))
+        if(try_lock())
             return;
-
         lock_slow();
     }
 
     void lock_slow() {
 
         while (1) {
-            State s = Unlocked;
-            if (m_state.compare_exchange_weak(s, Locked, std::memory_order_acquire))
+            State s = m_state.load(std::memory_order_relaxed);
+            if (s == Unlocked && try_lock())
                 return;
-            if (s == LockedAndWaiting || m_state.compare_exchange_weak(s, LockedAndWaiting, std::memory_order_relaxed))
+            if (s == LockedAndBlocked ||
+                m_state.compare_exchange_strong(s, LockedAndBlocked, std::memory_order_relaxed) ||
+                s == LockedAndBlocked)
                 sync.wait(m_state, Unlocked, std::memory_order_relaxed);
         }
     }
@@ -257,7 +267,7 @@ public:
     void unlock()
     {
         State s = Locked;
-        if (__synchronic_expect(m_state.compare_exchange_weak(s, Unlocked, std::memory_order_release), 1))
+        if (__synchronic_expect(m_state.compare_exchange_strong(s, Unlocked, std::memory_order_release), 1))
             return;
 
         unlock_slow();
@@ -265,12 +275,12 @@ public:
 
     void unlock_slow() {
 
-        sync.notify_one(m_state, Unlocked, std::memory_order_release);
+        sync.notify_all(m_state, Unlocked, std::memory_order_release);
     }
 
 private:
     std::atomic<State> m_state;
     std::experimental::synchronic<State> sync;
 };
-
+*/
 #endif //TEST_HPP

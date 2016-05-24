@@ -289,13 +289,16 @@ int main(int, const char *[]) {
     test_mutex_1 m2;
 
 #ifdef WTF_LOCKS
+#define HAS_LOCK_2
     typedef WTF::Lock test_mutex_2;
-#else
-    typedef webkit_mutex test_mutex_2;
+//#else
+//    typedef webkit_mutex test_mutex_2;
 #endif
 
+#ifdef HAS_LOCK_2
     test_mutex_2 m3;
-
+#endif
+    
     auto const N = std::thread::hardware_concurrency();
     assert(N <= 1024);
 
@@ -321,10 +324,13 @@ int main(int, const char *[]) {
         { std::unique_lock<test_mutex_1>(m2); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
+#ifdef HAS_LOCK_2
     do_run(csv, "webkit_mutex single-threaded", 1, [=, &m2](int, std::mt19937&) mutable {
         { std::unique_lock<test_mutex_2>(m3); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
+#endif
+    
     // CONTROL FOR N-THREAD
 
     auto cost_n = do_run(nullstream, "CONTROL for uncontended N-thread", N, [=](int, std::mt19937&) mutable {
@@ -340,7 +346,9 @@ int main(int, const char *[]) {
 
     std::mutex m1N[1024];
     test_mutex_1 m2N[1024];
+#ifdef HAS_LOCK_2
     test_mutex_2 m3N[1024];
+#endif
 
     // NO CONTENTION
 
@@ -354,11 +362,13 @@ int main(int, const char *[]) {
         { std::unique_lock<test_mutex_1> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
+#ifdef HAS_LOCK_2
     do_run(csv, "webkit_mutex no contention", N, [=, &m3N](int i, std::mt19937&) mutable {
         auto& m = m3N[i];
         { std::unique_lock<test_mutex_2> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
+#endif
 
     // LOW-P CONTENTION
 
@@ -379,12 +389,14 @@ int main(int, const char *[]) {
         { std::unique_lock<test_mutex_1> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
+#ifdef HAS_LOCK_2
     do_run(csv, "webkit_mutex rare contention", N, [=, &m3N](int, std::mt19937& dr) mutable {
         auto& m = m3N[dr() & mask];
         { std::unique_lock<test_mutex_2> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-
+#endif
+    
     // SHORTEST
 
     auto shortest_count = 1;
@@ -396,11 +408,13 @@ int main(int, const char *[]) {
         std::unique_lock<test_mutex_1> l(m2);
         r.discard(1);
     }, shortest_count, cost);
+#ifdef HAS_LOCK_2
     do_run(csv, "webkit_mutex shortest sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         r.discard(1);
     }, shortest_count, cost);
-
+#endif
+    
     // SHORT
 
     auto short_count = int(2E2 / cost);
@@ -412,10 +426,12 @@ int main(int, const char *[]) {
         std::unique_lock<test_mutex_1> l(m2);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
+#ifdef HAS_LOCK_2
     do_run(csv, "webkit_mutex short sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
+#endif
 
     // LONG
 
@@ -428,10 +444,12 @@ int main(int, const char *[]) {
         std::unique_lock<test_mutex_1> l(m2);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
+#ifdef HAS_LOCK_2
     do_run(csv, "webkit_mutex long sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
+#endif
 
     //
 
