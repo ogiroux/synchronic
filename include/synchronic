@@ -195,11 +195,11 @@ inline namespace concurrency_v2 {
     // These two helper functions implement the first 3 of the 4 phases of the back-off process. They are used in more than one place.
     template <class T>
     bool __synchronic_spin_for_change(const atomic<T>& arg, T nval, memory_order order) noexcept {
-#if !defined(__APPLE__) && !defined(WIN32)
-        for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
-            if (__synchronic_expect(arg.load(order) != nval, 1))
-                return true;
-#endif
+//#if !defined(__APPLE__) && !defined(WIN32)
+//        for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
+//            if (__synchronic_expect(arg.load(order) != nval, 1))
+//                return true;
+//#endif
         for (int i = 0; i < __magic_number_2; __synchronic_yield(), ++i)
             if (__synchronic_expect(arg.load(order) != nval, 1))
                 return true;
@@ -211,11 +211,11 @@ inline namespace concurrency_v2 {
     }
     template <class T>
     bool __synchronic_spin_for(const atomic<T>& arg, T val, memory_order order) noexcept {
-#if !defined(__APPLE__) && !defined(WIN32)
-        for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
-            if (__synchronic_expect(arg.load(order) == val, 1))
-                return true;
-#endif
+//#if !defined(__APPLE__) && !defined(WIN32)
+//        for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
+//            if (__synchronic_expect(arg.load(order) == val, 1))
+//                return true;
+//#endif
         for (int i = 0; i < __magic_number_2; __synchronic_yield(), ++i)
             if (arg.load(order) == val)
                 return true;
