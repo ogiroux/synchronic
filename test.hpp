@@ -127,7 +127,8 @@ struct alignas(64) ttas_mutex {
             int state = 0;
             if (locked.compare_exchange_weak(state, 1, std::memory_order_acquire))
                 return;
-            sync.wait_for_change(locked, state, std::memory_order_relaxed);
+            if (state != 0)
+                sync.wait_for_change(locked, state, std::memory_order_relaxed);
         }
     }
     void unlock() {

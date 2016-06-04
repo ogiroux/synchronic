@@ -88,9 +88,9 @@ inline namespace concurrency_v2 {
 #endif
 
     // On x86, 'rep;nop' / 'pause' is a quick yield for hyper-threads.
-#if defined(WIN32)
+#if defined(_MSC_VER) && (defined(_M_X86) || defined(_M_X64))
     inline void __synchronic_relax() { _mm_pause(); }
-#elif defined(__linux__) || defined(__APPLE__)
+#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
     inline void __synchronic_relax() { asm volatile("pause"); }
 #else
     // Elsehwere, we use the Standard yield for that too.
