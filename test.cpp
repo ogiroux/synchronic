@@ -26,12 +26,15 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
+//#define SYNCHRONIC_TUNE
+
 #ifdef WIN32
-#define _WIN32_WINNT 0x0601
+#define _WIN32_WINNT 0x0602
 #endif
 
 #include "test.hpp"
 
+#include <map>
 #include <string>
 #include <atomic>
 #include <random>
@@ -42,8 +45,8 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <iomanip>
 #include <algorithm>
 
-static constexpr int measure_count = 1 << 30;
-static constexpr int time_target_in_seconds = 4;
+static int measure_count = 1 << 30;
+static double time_target_in_seconds = 5;
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <unistd.h>
@@ -181,7 +184,7 @@ public:
         std::uint64_t steps;
     };
     template <class F>
-    report time(int threads, F f, std::uint64_t target_count) {
+    report time(std::ostream& log, int threads, F f, std::uint64_t target_count) {
         std::random_device d;
         for (int i = 0; i < threads; ++i) {
             auto s = d();
@@ -204,7 +207,7 @@ public:
         auto start = my_clock::now();
         std::uint64_t it1 = iterations;
         if (threads)
-            std::this_thread::sleep_for(std::chrono::seconds(time_target_in_seconds));
+            std::this_thread::sleep_for(std::chrono::milliseconds(uint64_t(1000*time_target_in_seconds)));
         else {
             std::mt19937 r;
             for (std::uint64_t i = 0; i < target_count; ++i) {
@@ -215,7 +218,7 @@ public:
         std::uint64_t it2 = iterations;
         auto end = my_clock::now();
         auto cpu_end = get_cpu_time();
-        std::cout << "Done, canceling threads...\r" << std::flush;
+        log << "Done, canceling threads...\r" << std::flush;
         stop = true;
         while (running != 0) std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -231,14 +234,14 @@ public:
 };
 
 template <class F>
-double do_run(std::ostream& csv, std::string const& what, int threads, F f, int count, double cost)
+double do_run(std::ostream& csv, std::ostream& log, std::string const& what, int threads, F f, int count, double cost)
 {
-    std::cout << "Measuring " << what << " (" << threads << "T, " << time_target_in_seconds
+    log << "Measuring " << what << " (" << threads << "T, " << time_target_in_seconds
         << "s, step = " << count << " x " << cost << " ns)" << std::endl;
 
     auto expected = count * cost;
-    auto r = run().time(threads, f, std::uint64_t(time_target_in_seconds * 1E9 / expected));
-    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+    auto r = run().time(log, threads, f, std::uint64_t(time_target_in_seconds * 1E9 / expected));
+    log << std::right << std::setfill(' ') << std::setw(20) <<
         "total progress : " << r.steps << " steps in " << r.wall_time << "ns" << std::endl;
 
     auto wall_time = r.wall_time / r.steps;
@@ -255,12 +258,12 @@ double do_run(std::ostream& csv, std::string const& what, int threads, F f, int 
     std::cout << std::right << std::setfill(' ') << std::setw(20) <<
     "cpu : " << cpu_time << " ns/step (" << cpu_time / expected * 100 << "%)" << std::endl;
     */
-    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+    log << std::right << std::setfill(' ') << std::setw(20) <<
         "[user : " << user_time / cpu_time * 100 << "%]" << std::endl;
-    std::cout << std::right << std::setfill(' ') << std::setw(20) <<
+    log << std::right << std::setfill(' ') << std::setw(20) <<
         "[system : " << system_time / cpu_time * 100 << "%]" << std::endl;
 
-    std::cout << std::endl;
+    log << std::endl;
 
     csv << "\"" << what << "\"," << threads << ',' << r.steps << ',' << r.wall_time << ',' << expected << ','
         << wall_time / expected << ',' << cpu_time / expected << ',' << user_time / cpu_time << ',' << system_time / cpu_time << std::endl;
@@ -269,6 +272,8 @@ double do_run(std::ostream& csv, std::string const& what, int threads, F f, int 
 }
 
 int main(int, const char *[]) {
+
+//    time_target_in_seconds = 0.5;
 
 #ifdef WTF_LOCKS
     WTF::initializeThreading();
@@ -308,7 +313,7 @@ int main(int, const char *[]) {
     compute_work_item_cost(r);
     auto cost = compute_work_item_cost(r);
     auto target_count = int(5E1 / cost);
-    cost = do_run(nullstream, "CONTROL run for 1-thread", 1, [=](int, std::mt19937&) mutable {
+    cost = do_run(nullstream, std::cout, "CONTROL run for 1-thread", 1, [=](int, std::mt19937&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     std::cout << "Adjusting cost to " << cost << " ns/iteration (targeting " << target_count << " iterations/step).\n";
@@ -316,16 +321,16 @@ int main(int, const char *[]) {
 
     // SINGLE THREADED
 
-    do_run(csv, "std::mutex single-threaded", 1, [=, &m1](int, std::mt19937&) mutable {
+    auto std_single_threaded = do_run(csv, std::cout, "std::mutex single-threaded", 1, [=, &m1](int, std::mt19937&) mutable {
         { std::unique_lock<std::mutex>(m1); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    do_run(csv, "ttas_mutex single-threaded", 1, [=, &m2](int, std::mt19937&) mutable {
+    auto ttas_single_threaded = do_run(csv, std::cout, "ttas_mutex single-threaded", 1, [=, &m2](int, std::mt19937&) mutable {
         { std::unique_lock<test_mutex_1>(m2); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, "webkit_mutex single-threaded", 1, [=, &m2](int, std::mt19937&) mutable {
+    do_run(csv, std::cout, "webkit_mutex single-threaded", 1, [=, &m2](int, std::mt19937&) mutable {
         { std::unique_lock<test_mutex_2>(m3); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
@@ -333,7 +338,7 @@ int main(int, const char *[]) {
     
     // CONTROL FOR N-THREAD
 
-    auto cost_n = do_run(nullstream, "CONTROL for uncontended N-thread", N, [=](int, std::mt19937&) mutable {
+    auto cost_n = do_run(nullstream, std::cout, "CONTROL for uncontended N-thread", N, [=](int, std::mt19937&) mutable {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
     if (cost_n < cost)
@@ -350,20 +355,72 @@ int main(int, const char *[]) {
     test_mutex_2 m3N[1024];
 #endif
 
+#ifdef SYNCHRONIC_TUNE
+
+    // TUNING
+    {
+        time_target_in_seconds = 0.25;
+
+        using namespace std::experimental::concurrency_v2;
+
+        struct rec { int _1, _2, _3, _4; };
+        std::map<double, rec> m;
+
+        __magic_number_1 = __magic_number_2 = __magic_number_3 = 48;
+        for (int _ = 0; _ < 4; ++_) {
+            auto _1 = max(8, __magic_number_1);
+            auto _2 = max(8, __magic_number_2);
+            auto _3 = max(8, __magic_number_3);
+            for (int i = 0; i < 4; ++i)
+                for (int j = 0; j < 4; ++j)
+                    for (int k = 0; k < 4; ++k) {
+
+                        double weights[4][4] = { 
+                            { 0.0, 0.25, 1.0, 8.0  } , 
+                            { 0.0, 0.5,  1.0, 1.5  } ,
+                            { 0.0, 0.75, 1.0, 1.25 } ,
+                            { 0.0, 0.90, 1.0, 1.1  }
+                        };
+
+                        auto x = m.begin()->second;
+                        __magic_number_1 = int(_1 * weights[_][i]);
+                        __magic_number_2 = int(_2 * weights[_][j]);
+                        __magic_number_3 = int(_3 * weights[_][k]);
+
+                        auto t = do_run(nullstream, nullstream, "ttas_mutex shortest sections TUNING", N, [=, &m2](int, std::mt19937&) mutable {
+                            std::unique_lock<test_mutex_1> l(m2);
+                            r.discard(1);
+                        }, 1, cost);
+
+                        std::cout << "Setting _1=" << __magic_number_1 << ", _2=" << __magic_number_2 << ", _3=" << __magic_number_3 << ", overhead=" << t << std::endl;
+                        rec r = { __magic_number_1, __magic_number_2, __magic_number_3 };
+                        m[t] = r;
+                    }
+            __magic_number_1 = m.begin()->second._1;
+            __magic_number_2 = m.begin()->second._2;
+            __magic_number_3 = m.begin()->second._3;
+        }
+
+        std::cout << "\n\nSelected with _1=" << __magic_number_1 << ", _2=" << __magic_number_2 << ", _3=" << __magic_number_3 << std::endl;
+
+        time_target_in_seconds = 4;
+    }
+#endif
+
     // NO CONTENTION
 
-    do_run(csv, "std::mutex no contention", N, [=, &m1N](int i, std::mt19937&) mutable {
+    auto std_no_contention = do_run(csv, std::cout, "std::mutex no contention", N, [=, &m1N](int i, std::mt19937&) mutable {
         auto& m = m1N[i];
         { std::unique_lock<std::mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    do_run(csv, "ttas_mutex no contention", N, [=, &m2N](int i, std::mt19937&) mutable {
+    auto ttas_no_contention = do_run(csv, std::cout, "ttas_mutex no contention", N, [=, &m2N](int i, std::mt19937&) mutable {
         auto& m = m2N[i];
         { std::unique_lock<test_mutex_1> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, "webkit_mutex no contention", N, [=, &m3N](int i, std::mt19937&) mutable {
+    do_run(csv, std::cout, "webkit_mutex no contention", N, [=, &m3N](int i, std::mt19937&) mutable {
         auto& m = m3N[i];
         { std::unique_lock<test_mutex_2> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
@@ -379,18 +436,18 @@ int main(int, const char *[]) {
         std::cout << std::endl;
     }
     auto mask = (4 << std::ilogb(N)) - 1;
-    do_run(csv, "std::mutex rare contention", N, [=, &m1N](int, std::mt19937& dr) mutable {
+    auto std_rare_contention = do_run(csv, std::cout, "std::mutex rare contention", N, [=, &m1N](int, std::mt19937& dr) mutable {
         auto& m = m1N[dr() & mask];
         { std::unique_lock<std::mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    do_run(csv, "ttas_mutex rare contention", N, [=, &m2N](int, std::mt19937& dr) mutable {
+    auto ttas_rare_contention = do_run(csv, std::cout, "ttas_mutex rare contention", N, [=, &m2N](int, std::mt19937& dr) mutable {
         auto& m = m2N[dr() & mask];
         { std::unique_lock<test_mutex_1> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, "webkit_mutex rare contention", N, [=, &m3N](int, std::mt19937& dr) mutable {
+    do_run(csv, std::cout, "webkit_mutex rare contention", N, [=, &m3N](int, std::mt19937& dr) mutable {
         auto& m = m3N[dr() & mask];
         { std::unique_lock<test_mutex_2> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
@@ -400,16 +457,16 @@ int main(int, const char *[]) {
     // SHORTEST
 
     auto shortest_count = 1;
-    do_run(csv, "std::mutex shortest sections", N, [=, &m1](int, std::mt19937&) mutable {
+    auto std_shortest = do_run(csv, std::cout, "std::mutex shortest sections", N, [=, &m1](int, std::mt19937&) mutable {
         std::unique_lock<std::mutex> l(m1);
         r.discard(1);
     }, shortest_count, cost);
-    do_run(csv, "ttas_mutex shortest sections", N, [=, &m2](int, std::mt19937&) mutable {
+    auto ttas_shortest = do_run(csv, std::cout, "ttas_mutex shortest sections", N, [=, &m2](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_1> l(m2);
         r.discard(1);
     }, shortest_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, "webkit_mutex shortest sections", N, [=, &m3](int, std::mt19937&) mutable {
+    do_run(csv, std::cout, "webkit_mutex shortest sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         r.discard(1);
     }, shortest_count, cost);
@@ -418,16 +475,16 @@ int main(int, const char *[]) {
     // SHORT
 
     auto short_count = int(2E2 / cost);
-    do_run(csv, "std::mutex short sections", N, [=, &m1](int, std::mt19937&) mutable {
+    auto std_short = do_run(csv, std::cout, "std::mutex short sections", N, [=, &m1](int, std::mt19937&) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
-    do_run(csv, "ttas_mutex short sections", N, [=, &m2](int, std::mt19937&) mutable {
+    auto ttas_short = do_run(csv, std::cout, "ttas_mutex short sections", N, [=, &m2](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_1> l(m2);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, "webkit_mutex short sections", N, [=, &m3](int, std::mt19937&) mutable {
+    do_run(csv, std::cout, "webkit_mutex short sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
@@ -436,16 +493,16 @@ int main(int, const char *[]) {
     // LONG
 
     auto long_count = int(1E7 / cost);
-    do_run(csv, "std::mutex long sections", N, [=, &m1](int, std::mt19937&) mutable {
+    auto std_long = do_run(csv, std::cout, "std::mutex long sections", N, [=, &m1](int, std::mt19937&) mutable {
         std::unique_lock<std::mutex> l(m1);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
-    do_run(csv, "ttas_mutex long sections", N, [=, &m2](int, std::mt19937&) mutable {
+    auto ttas_long = do_run(csv, std::cout, "ttas_mutex long sections", N, [=, &m2](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_1> l(m2);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, "webkit_mutex long sections", N, [=, &m3](int, std::mt19937&) mutable {
+    do_run(csv, std::cout, "webkit_mutex long sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
@@ -453,5 +510,13 @@ int main(int, const char *[]) {
 
     //
 
+    std::cout << "\n\n == REPORT == \n\n";
+    std::cout << "single-thread, " << std_single_threaded / ttas_single_threaded << std::endl;
+    std::cout << "uncontended, " << std_no_contention / ttas_no_contention << std::endl;
+    std::cout << "shortest, " << std_shortest / ttas_shortest << std::endl;
+    std::cout << "short, " << std_short / ttas_short << std::endl;
+    std::cout << "long, " << std_long / ttas_long << std::endl;
+
     return 0;
 }
+

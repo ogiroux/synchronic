@@ -88,13 +88,25 @@ inline namespace concurrency_v2 {
 #endif
 
     // On x86, 'rep;nop' / 'pause' is a quick yield for hyper-threads.
-#if defined(_MSC_VER) && (defined(_M_X86) || defined(_M_X64))
-    inline void __synchronic_relax() { _mm_pause(); }
-#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
-    inline void __synchronic_relax() { asm volatile("pause"); }
-#else
-    // Elsehwere, we use the Standard yield for that too.
-    inline void __synchronic_relax() { __synchronic_yield(); }
+#if defined(_MSC_VER)
+    #if (defined(_M_X86) || defined(_M_X64))
+        #define __synchronic_x86
+        #define __synchronic_relax _mm_pause
+    #elif defined(_M_ARM)
+        #define __synchronic_arm
+    #endif
+#elif defined(__GNUC__) 
+    #if (defined(__i386__) || defined(__x86_64__))
+        #define __synchronic_x86
+        //inline void __synchronic_pause() { asm volatile("pause"); }
+        //#define __synchronic_relax __synchronic_pause
+    #elif defined(__arm__)
+        #define __synchronic_arm
+    #endif
+#endif
+
+#ifndef __synchronic_relax
+    #define __synchronic_relax __synchronic_yield
 #endif
 
     // On GCC (and Clang) we provide some expected profile information.
@@ -168,15 +180,21 @@ inline namespace concurrency_v2 {
 
 #endif // defined(WIN32) && _WIN32_WINNT >= 0x0602
 
-    // Only the order of magnitude of these numbers really matters.
-    static constexpr int __magic_number_1 = 128;    // Poll iterations with relax. (Cost model: ~10ns.)
-    static constexpr int __magic_number_2 = 64;     // Poll iterations with yield. (Cost model: ~1us.)
-#ifndef WIN32
-    static constexpr int __magic_number_3 = 32;    // Greatest power-of-two to sleep for, in the timed backoff portion.
-#else
-    static constexpr int __magic_number_3 = 4;      // On Windows, the sleep functions are incredibly slow so we skip most of that in phase-3.
+#ifndef SYNCHRONIC_TUNE
+#define __synchronic_constexpr constexpr
+#else 
+#define __synchronic_constexpr volatile
 #endif
-    static constexpr int __magic_number_4 = 2048;   // Maximum timed sleep during backoff, in microseconds.
+
+    // Only the order of magnitude of these numbers really matters.
+    static __synchronic_constexpr int __magic_number_1 = 32;    // Poll iterations with nothing. (Cost model: ~10ns.)
+#ifdef __synchronic_arm
+    static __synchronic_constexpr int __magic_number_2 = 8;
+#else
+    static __synchronic_constexpr int __magic_number_2 = 0;     // Poll iterations with relax. (Cost model: ??? It seems to be all over the place.)
+#endif
+    static __synchronic_constexpr int __magic_number_3 = 16;     // 64;  // Poll iterations with yield. (Const model: 1..10us.)
+    static __synchronic_constexpr int __magic_number_4 = 2048;  // Maximum timed sleep during backoff, in microseconds.
 
     // A simple exponential back-off helper that is designed to cover the space between (1<<__magic_number_3) and __magic_number_4
     class __synchronic_exponential_backoff {
@@ -195,34 +213,76 @@ inline namespace concurrency_v2 {
     // These two helper functions implement the first 3 of the 4 phases of the back-off process. They are used in more than one place.
     template <class T>
     bool __synchronic_spin_for_change(const atomic<T>& arg, T nval, memory_order order) noexcept {
-//#if !defined(__APPLE__) && !defined(WIN32)
-//        for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
-//            if (__synchronic_expect(arg.load(order) != nval, 1))
-//                return true;
-//#endif
-        for (int i = 0; i < __magic_number_2; __synchronic_yield(), ++i)
-            if (__synchronic_expect(arg.load(order) != nval, 1))
+        for (int i = 0; i < __magic_number_1; ++i)
+            if (__synchronic_expect(arg.load(order) != nval, 1)) 
                 return true;
+#ifdef __synchronic_arm
+        for (int i = 16; i < __magic_number_2; ++i) {
+            T tmp;
+            __asm__ __volatile__(
+                "ldrex %0, [%1]\n"
+                "cmp %0, %2\n"
+                "it eq\n"
+                "wfeeq.n\n"
+                "nop.w\n"
+                : "=&r" (tmp) : "r" (&arg), "r" (nval) : "cc"
+                );
+            if (__synchronic_expect(tmp != nval, 1)) {
+                atomic_thread_fence(order);
+                return true;
+            }
+        }
+#else
+        for (int i = 0; i < __magic_number_2; __synchronic_relax(), ++i)
+            if (__synchronic_expect(arg.load(order) != nval, 1)) 
+                return true;
+#endif
+        for (int i = 0; i < __magic_number_3; __synchronic_yield(), ++i)
+            if (__synchronic_expect(arg.load(order) != nval, 1)) 
+                return true;
+#ifdef WIN32
         __synchronic_exponential_backoff b;
-        for (int i = 0; (1 << i) < __magic_number_3; b.sleep(1 << i), ++i)
-            if (__synchronic_expect(arg.load(order) != nval, 1))
+        for (int i = 0; i < 8; b.sleep(1 << i), ++i)
+            if (__synchronic_expect(arg.load(order) != nval, 1)) 
                 return true;
+#endif
         return false;
     }
     template <class T>
     bool __synchronic_spin_for(const atomic<T>& arg, T val, memory_order order) noexcept {
-//#if !defined(__APPLE__) && !defined(WIN32)
-//        for (int i = 0; i < __magic_number_1; __synchronic_relax(), ++i)
-//            if (__synchronic_expect(arg.load(order) == val, 1))
-//                return true;
-//#endif
-        for (int i = 0; i < __magic_number_2; __synchronic_yield(), ++i)
-            if (arg.load(order) == val)
+        for (int i = 0; i < __magic_number_1; ++i)
+            if (__synchronic_expect(arg.load(order) == val, 1))
                 return true;
+#ifdef __synchronic_arm
+        for (int i = 16; i < __magic_number_2; ++i) {
+            T tmp;
+            __asm__ __volatile__(
+                "ldrex %0, [%1]\n"
+                "cmp %0, %2\n"
+                "it ne\n"
+                "wfene.n\n"
+                "nop.w\n"
+                : "=&r" (tmp) : "r" (&arg), "r" (val) : "cc"
+                );
+            if (__synchronic_expect(tmp == val, 1)) {
+                atomic_thread_fence(order);
+                return true;
+            }
+        }
+#else
+        for (int i = 0; i < __magic_number_2; __synchronic_relax(), ++i)
+            if (__synchronic_expect(arg.load(order) == val, 1))
+                return true;
+#endif
+        for (int i = 0; i < __magic_number_3; __synchronic_yield(), ++i)
+            if (__synchronic_expect(arg.load(order) == val, 1))
+                return true;
+#ifdef WIN32
         __synchronic_exponential_backoff b;
-        for (int i = 0; (1 << i) < __magic_number_3; b.sleep(1 << i), ++i)
-            if (arg.load(order) == val)
+        for (int i = 0; i < 3; b.sleep(1 << i), ++i)
+            if (__synchronic_expect(arg.load(order) == val, 1))
                 return true;
+#endif
         return false;
     }
 
@@ -244,16 +304,57 @@ inline namespace concurrency_v2 {
 
         mutable atomic<int> waiting;   // Used to optimize-out calls to the kernel futex wake api.
         mutable atomic<int> notifying;
+
+#ifdef __synchronic_arm
+        mutable atomic<int> notify_lock; // Used to prevent a race on destructors
+        static constexpr int Unlocked = 0, Locked = 1;
+
+        void _lock() {
+
+            int tmp;
+            __asm__ __volatile__(
+                "1: ldrex %0, [%1]\n"
+                "   teq %0, %2\n"
+                "   itee ne\n"
+                "   wfene.n\n"
+                "   strexeq %0, %3, [%1]\n"
+                "   teqeq %0, %2\n"
+                "   bne 1b\n"
+//                "   dmb\n"
+                : "=&r" (tmp)
+                : "r" (&this->notify_lock), "r" (Unlocked), "r" (Locked)
+                : "cc"
+                );
+        }
+        void _unlock() {
+
+            notify_lock.store(Unlocked, memory_order_release);
+            __asm__ __volatile__(
+                "   dsb\n"
+                "   sev"
+                );
+        }
+#else
         mutable atomic<bool> notify_lock; // Used to prevent a race on destructors
         static constexpr bool Unlocked = false, Locked = true;
+
+        inline void _lock() {
+
+            while (notify_lock.load(memory_order_acquire) != Unlocked)
+                __synchronic_relax();
+        }
+        inline void _unlock() {
+
+            notify_lock.store(Unlocked, memory_order_release);
+        }
+#endif
 
     public:
         __direct_futex_synchronic() : waiting(0), notifying(0), notify_lock(Unlocked) { }
         ~__direct_futex_synchronic() {
 
             // We need to ensure that notify functions have completed or we'll have UB by use-after-free.
-            while (notify_lock.load(memory_order_acquire) != Unlocked)
-                __synchronic_relax();
+            _lock();
             while (notifying.load(memory_order_acquire))
                 __synchronic_relax();
         }
@@ -281,13 +382,12 @@ inline namespace concurrency_v2 {
         template <class F>
         __syn_gcc_inline void notify(atomic<T>& object, F func, bool all) {
 
-            while (notify_lock.exchange(Locked, memory_order_acquire) != Unlocked)
-                __synchronic_relax();
+            _lock();
             try {
                 func(object);
                 if (__synchronic_expect(waiting.load(memory_order_acquire) != 0, 0)) {
                     notifying.fetch_add(1, memory_order_acquire);
-                    notify_lock.store(Unlocked, memory_order_release);
+                    _unlock();
                     if (all)
                         __synchronic_wake_all(&object);
                     else
@@ -295,10 +395,10 @@ inline namespace concurrency_v2 {
                     notifying.fetch_add(-1, memory_order_release);
                 }
                 else
-                    notify_lock.store(Unlocked, memory_order_release);
+                    _unlock();
             }
             catch (...) {
-                notify_lock.store(Unlocked, memory_order_release);
+                _unlock();
                 throw;
             }
         }
@@ -606,3 +706,4 @@ inline namespace concurrency_v2 {
 } // namespace std
 
 #endif // __SYNCHRONIC
+
