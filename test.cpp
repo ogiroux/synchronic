@@ -45,7 +45,7 @@ OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <iomanip>
 #include <algorithm>
 
-static int measure_count = 1 << 30;
+static int measure_count = 1 << 28;
 static double time_target_in_seconds = 5;
 
 #if defined(__linux__) || defined(__APPLE__)

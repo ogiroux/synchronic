@@ -139,6 +139,186 @@ private:
     std::experimental::synchronic<int> sync;
 };
 
+template <class T>
+struct semaphoric {
+
+    enum C : int {
+        Uncontended = 0,
+        Contended
+    };
+
+    struct payload {
+        payload() : value(), state() { }
+        payload(T t, C c) : value(t), state(c) { }
+        bool operator==(payload const& p) const noexcept { return value == p.value && state == p.state; }
+        bool operator!=(payload const& p) const noexcept { return value != p.value || state != p.state; }
+        T value;
+        C state;
+    };
+
+    std::atomic<payload> atom;
+    std::experimental::synchronic<payload> sync;
+
+    semaphoric() = default;
+    constexpr semaphoric(T t) noexcept : atom(payload(t, Uncontended)) {
+    }
+    semaphoric(semaphoric const&) = delete;
+    semaphoric& operator=(semaphoric const&) = delete;
+
+    T operator=(T t) noexcept {
+        store(t);
+        return *this;
+    }
+    operator T() const noexcept {
+        return load();
+    }
+    T load(std::memory_order o = std::memory_order_seq_cst) const noexcept {
+        auto p = atom.load(o);
+        return p.value;
+    }
+    void store(T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
+        sync.notify_all(atom, [t, o](std::atomic<payload>& a) {
+            a.store(payload(t, Uncontended), o);
+        });
+    }
+    T exchange(T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
+        sync.notify_all(atom, [&t, o](std::atomic<payload>& a) {
+            t = a.exchange(payload(t, Uncontended), o);
+        });
+        return t;
+    }
+    bool compare_exchange_weak(T& t_, T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
+        bool b;
+        payload p(t_, Uncontended);
+        sync.notify_all(atom, [t, o, &b, &p](std::atomic<payload>& a) {
+            b = a.compare_exchange_weak(p, payload(t, Uncontended), o);
+        });
+        t_ = p.value;
+        return b;
+    }
+    bool compare_exchange_strong(T&, T, std::memory_order = std::memory_order_seq_cst) noexcept {
+        bool b;
+        payload p(t_, Uncontended);
+        sync.notify_all(atom, [t, o, &b, &p](std::atomic<payload>& a) {
+            b = a.compare_exchange_strong(p, payload(t, Uncontended), o);
+        });
+        t_ = p.value;
+        return b;
+    }
+    void wait_for_change(T t, std::memory_order o = std::memory_order_seq_cst) const {
+        payload p(t, Uncontended);
+        sync.wait_for_change(atom, p, o);
+    }
+};
+
+template <class T>
+struct semaphoric2 {
+
+    struct payload {
+        payload() : value(), contention_count() { }
+        payload(T t, int count = 0) : value(t), contention_count(count) { }
+        bool operator==(payload const& p) const noexcept { return value == p.value && contention_count == p.contention_count; }
+        bool operator!=(payload const& p) const noexcept { return value != p.value || contention_count != p.contention_count; }
+        T value;
+        int contention_count;
+    };
+
+    mutable std::atomic<payload> atom;
+    //mutable std::experimental::synchronic<payload, std::experimental::synchronic_type::optimized_for_long_wait> sync;
+
+    semaphoric2() = default;
+    constexpr semaphoric2(T t) noexcept : atom(payload(t, 0)) { }
+    semaphoric2(semaphoric2 const&) = delete;
+    semaphoric2& operator=(semaphoric2 const&) = delete;
+    T operator=(T t) noexcept { store(t); return *this; }
+    operator T() const noexcept { return load(); }
+
+    T load(std::memory_order o = std::memory_order_seq_cst) const noexcept {
+
+        return atom.load(o).value;
+    }
+    void store(T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
+
+        exchange(t, o);
+    }
+    T exchange(T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
+
+        T t_ = load(std::memory_order_relaxed);
+        while (!compare_exchange_weak(t_, t, o))
+            ;
+        return t_;
+    }
+    bool compare_exchange_weak(T& t_, T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
+
+        return compare_exchange_strong(t_, t, o);
+    }
+    bool compare_exchange_strong(T& t_, T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
+
+        payload p(t_, 0);
+        if (atom.compare_exchange_strong(p, payload(t, 0), o))
+            return true;
+
+        bool b = false;
+        if (p.value == t_) {
+            do {
+                b = atom.compare_exchange_weak(p, payload(t, p.contention_count), o);
+            } while (!b && p.value == t_);
+            std::experimental::__synchronic_wake_all(&atom);
+        }
+
+        t_ = p.value;
+        return b;
+    }
+    void wait_for_change(T t, std::memory_order o = std::memory_order_seq_cst) const {
+
+        if (std::experimental::__synchronic_spin_for_change(*this, t, o))
+            return;
+
+        payload p = atom.load(std::memory_order_relaxed);
+        //increment
+        while (1) {
+            if (p.value != t)
+                return;
+            if (atom.compare_exchange_weak(p, payload(p.value, p.contention_count + 1), o))
+                break;
+        }
+        //wait
+        while(1) { 
+            p = atom.load(std::memory_order_relaxed);
+            if (p.value != t)
+                break;
+            std::experimental::__synchronic_wait(&atom, p);
+        }
+        //decrement
+        while (!atom.compare_exchange_weak(p, payload(p.value, p.contention_count - 1), o))
+            ;
+    }
+};
+
+struct alignas(64) ttas_mutex2 {
+    ttas_mutex2() : locked(0) { }
+    ttas_mutex2(const ttas_mutex2&) = delete;
+    ttas_mutex2& operator=(const ttas_mutex2&) = delete;
+    void lock() {
+        while (1) {
+            int state = 0;
+            if (locked.compare_exchange_weak(state, 1, std::memory_order_acquire))
+                return;
+            if (state != 0)
+                locked.wait_for_change(state, std::memory_order_relaxed);
+        }
+    }
+    void unlock() {
+        //locked.store(0, std::memory_order_release);
+        int i = 1;
+        locked.compare_exchange_strong(i, 0, std::memory_order_release);
+    }
+private:
+    semaphoric2<int> locked;
+};
+
+//#define ttas_mutex ttas_mutex2
+
 struct ticket_mutex {
 
     ticket_mutex() : active(0), queue(0) {

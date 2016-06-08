@@ -211,8 +211,8 @@ inline namespace concurrency_v2 {
     };
 
     // These two helper functions implement the first 3 of the 4 phases of the back-off process. They are used in more than one place.
-    template <class T>
-    bool __synchronic_spin_for_change(const atomic<T>& arg, T nval, memory_order order) noexcept {
+    template <class A, class T>
+    bool __synchronic_spin_for_change(const A& arg, T nval, memory_order order) noexcept {
         for (int i = 0; i < __magic_number_1; ++i)
             if (__synchronic_expect(arg.load(order) != nval, 1)) 
                 return true;
@@ -248,8 +248,8 @@ inline namespace concurrency_v2 {
 #endif
         return false;
     }
-    template <class T>
-    bool __synchronic_spin_for(const atomic<T>& arg, T val, memory_order order) noexcept {
+    template <class A, class T>
+    bool __synchronic_spin_for(const A& arg, T val, memory_order order) noexcept {
         for (int i = 0; i < __magic_number_1; ++i)
             if (__synchronic_expect(arg.load(order) == val, 1))
                 return true;
