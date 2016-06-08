@@ -196,7 +196,7 @@ struct semaphoric {
         t_ = p.value;
         return b;
     }
-    bool compare_exchange_strong(T&, T, std::memory_order = std::memory_order_seq_cst) noexcept {
+    bool compare_exchange_strong(T& t_, T t, std::memory_order o = std::memory_order_seq_cst) noexcept {
         bool b;
         payload p(t_, Uncontended);
         sync.notify_all(atom, [t, o, &b, &p](std::atomic<payload>& a) {
@@ -210,6 +210,8 @@ struct semaphoric {
         sync.wait_for_change(atom, p, o);
     }
 };
+
+#if defined(__linux__) || (_WIN32_WINNT >= 0x0602)
 
 template <class T>
 struct semaphoric2 {
@@ -316,6 +318,8 @@ struct alignas(64) ttas_mutex2 {
 private:
     semaphoric2<int> locked;
 };
+
+#endif
 
 //#define ttas_mutex ttas_mutex2
 
