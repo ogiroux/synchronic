@@ -187,9 +187,7 @@ inline namespace concurrency_v2 {
 #endif
 
     // Only the order of magnitude of these numbers really matters.
-#if defined(__APPLE__)
-    static __synchronic_constexpr int __magic_number_1 = 64; // Poll iterations with nothing.
-#elif defined(__synchronic_arm)
+#ifdef __synchronic_arm
     static __synchronic_constexpr int __magic_number_1 = 8;
 #else
     static __synchronic_constexpr int __magic_number_1 = 16;
