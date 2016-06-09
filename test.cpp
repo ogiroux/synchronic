@@ -368,9 +368,9 @@ int main(int, const char *[]) {
 
         __magic_number_1 = __magic_number_2 = __magic_number_3 = 48;
         for (int _ = 0; _ < 4; ++_) {
-            auto _1 = max(8, __magic_number_1);
-            auto _2 = max(8, __magic_number_2);
-            auto _3 = max(8, __magic_number_3);
+            auto _1 = std::max(8, (int)__magic_number_1);
+            auto _2 = std::max(8, (int)__magic_number_2);
+            auto _3 = std::max(8, (int)__magic_number_3);
             for (int i = 0; i < 4; ++i)
                 for (int j = 0; j < 4; ++j)
                     for (int k = 0; k < 4; ++k) {

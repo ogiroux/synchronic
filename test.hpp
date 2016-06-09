@@ -264,8 +264,13 @@ struct semaphoric {
     bool compare_exchange_strong(T& t_, T t, std::memory_order o = std::memory_order_seq_cst, bool n = true) noexcept {
         
         payload p(t_, 0);
-        if (__synchronic_expect(atom.compare_exchange_strong(p, payload(t, 0), o),1))
+        if (__synchronic_expect(atom.compare_exchange_strong(p, payload(t, 0), o),1)) {
+#ifdef __synchronic_arm
+            __asm__ __volatile__("dsb\n"
+                                 "sev");
+#endif
             return true;
+        }
         
         bool b = false;
         if (p.value == t_) {
@@ -279,6 +284,10 @@ struct semaphoric {
                     do {
                         b = a.compare_exchange_weak(p, payload(t, p.contention_count), o);
                     } while (!b && p.value == t_);
+#ifdef __synchronic_arm
+                    __asm__ __volatile__("dsb\n"
+                                         "sev");
+#endif
 #if defined(__linux__) || (_WIN32_WINNT >= 0x0602)
                 std::experimental::__synchronic_wake_all(&atom);
             }
