@@ -214,7 +214,12 @@ struct semaphoric_old {
 template <class T>
 struct semaphoric {
     
-    struct payload {
+    struct pseudopayload {
+        T v;
+        short c;
+    };
+
+    struct alignas(sizeof(pseudopayload)) payload {
         payload() : value(), contention_count() { }
         payload(T t, int count = 0) : value(t), contention_count(count) { }
         bool operator==(payload const& p) const noexcept { return value == p.value && contention_count == p.contention_count; }
