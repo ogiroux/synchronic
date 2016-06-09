@@ -190,22 +190,18 @@ inline namespace concurrency_v2 {
 #if defined(__APPLE__)
     static __synchronic_constexpr int __magic_number_1 = 64; // Poll iterations with nothing.
 #elif defined(__synchronic_arm)
-    static __synchronic_constexpr int __magic_number_1 = 8; // Poll iterations with nothing.
+    static __synchronic_constexpr int __magic_number_1 = 8;
 #else
     static __synchronic_constexpr int __magic_number_1 = 16;
 #endif
 
 #ifdef __synchronic_arm
-    static __synchronic_constexpr int __magic_number_2 = 8; // Poll iterations with CPU support.
+    static __synchronic_constexpr int __magic_number_2 = 1; // Poll iterations with CPU support.
 #else
-    static __synchronic_constexpr int __magic_number_2 = 0;
+    static __synchronic_constexpr int __magic_number_2 = 0; // Can't find any use for 'pause' on x86.
 #endif
 
-#ifndef __APPLE__
-    static __synchronic_constexpr int __magic_number_3 = 32; // Poll iterations with yield.
-#else
     static __synchronic_constexpr int __magic_number_3 = 64;
-#endif
 
     static __synchronic_constexpr int __magic_number_4 = 2048;  // Maximum timed sleep during backoff, in microseconds.
 
@@ -230,7 +226,7 @@ inline namespace concurrency_v2 {
             if (__synchronic_expect(arg.load(order) != nval, 1)) 
                 return true;
 #ifdef __synchronic_arm
-        for (int i = 16; i < __magic_number_2; ++i) {
+        for (int i = 0; i < __magic_number_2; ++i) {
             T tmp;
             __asm__ __volatile__(
                 "ldrex %0, [%1]\n"
@@ -267,7 +263,7 @@ inline namespace concurrency_v2 {
             if (__synchronic_expect(arg.load(order) == val, 1))
                 return true;
 #ifdef __synchronic_arm
-        for (int i = 16; i < __magic_number_2; ++i) {
+        for (int i = 0; i < __magic_number_2; ++i) {
             T tmp;
             __asm__ __volatile__(
                 "ldrex %0, [%1]\n"
