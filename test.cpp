@@ -436,12 +436,12 @@ int main(int, const char *[]) {
         std::cout << std::endl;
     }
     auto mask = (4 << std::ilogb(N)) - 1;
-    auto std_rare_contention = do_run(csv, std::cout, "std::mutex rare contention", N, [=, &m1N](int, std::mt19937& dr) mutable {
+    auto std_rare = do_run(csv, std::cout, "std::mutex rare contention", N, [=, &m1N](int, std::mt19937& dr) mutable {
         auto& m = m1N[dr() & mask];
         { std::unique_lock<std::mutex> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
-    auto ttas_rare_contention = do_run(csv, std::cout, "ttas_mutex rare contention", N, [=, &m2N](int, std::mt19937& dr) mutable {
+    auto ttas_rare = do_run(csv, std::cout, "ttas_mutex rare contention", N, [=, &m2N](int, std::mt19937& dr) mutable {
         auto& m = m2N[dr() & mask];
         { std::unique_lock<test_mutex_1> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
@@ -513,6 +513,7 @@ int main(int, const char *[]) {
     std::cout << "\n\n == REPORT == \n\n";
     std::cout << "single-thread, " << std_single_threaded / ttas_single_threaded << std::endl;
     std::cout << "uncontended, " << std_no_contention / ttas_no_contention << std::endl;
+    std::cout << "rare, " << std_rare / ttas_rare << std::endl;
     std::cout << "shortest, " << std_shortest / ttas_shortest << std::endl;
     std::cout << "short, " << std_short / ttas_short << std::endl;
     std::cout << "long, " << std_long / ttas_long << std::endl;

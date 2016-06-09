@@ -189,11 +189,11 @@ inline namespace concurrency_v2 {
     // Only the order of magnitude of these numbers really matters.
     static __synchronic_constexpr int __magic_number_1 = 32;    // Poll iterations with nothing. (Cost model: ~10ns.)
 #ifdef __synchronic_arm
-    static __synchronic_constexpr int __magic_number_2 = 8;
+    static __synchronic_constexpr int __magic_number_2 = 32;
 #else
     static __synchronic_constexpr int __magic_number_2 = 0;     // Poll iterations with relax. (Cost model: ??? It seems to be all over the place.)
 #endif
-    static __synchronic_constexpr int __magic_number_3 = 16;     // 64;  // Poll iterations with yield. (Const model: 1..10us.)
+    static __synchronic_constexpr int __magic_number_3 = 32;     // 64;  // Poll iterations with yield. (Const model: 1..10us.)
     static __synchronic_constexpr int __magic_number_4 = 2048;  // Maximum timed sleep during backoff, in microseconds.
 
     // A simple exponential back-off helper that is designed to cover the space between (1<<__magic_number_3) and __magic_number_4
