@@ -136,13 +136,13 @@ void set_affinity(std::uint64_t cpu) {
 }
 #endif
 
-#ifdef WTF_LOCKS
+#ifdef EXTRA_LOCKS
 // On Mac, you can build this in your Git/WebKit directory like so:
-// xcrun clang++ -DWTF_LOCKS=1 -IPATH_TO_SYNCHRONIC/synchronic/include -IPATH_TO_SYNCHRONIC/synchronic -o LockSpeedTest2 Source/WTF/benchmarks/LockSpeedTest2.cpp -O3 -W -ISource/WTF -ISource/WTF/benchmarks -LWebKitBuild/Release -lWTF -framework Foundation -licucore -std=c++11 -fvisibility=hidden
+// xcrun clang++ -DEXTRA_LOCKS=1 -IPATH_TO_SYNCHRONIC/synchronic/include -IPATH_TO_SYNCHRONIC/synchronic -o LockSpeedTest2 Source/WTF/benchmarks/LockSpeedTest2.cpp -O3 -W -ISource/WTF -ISource/WTF/benchmarks -LWebKitBuild/Release -lWTF -framework Foundation -licucore -std=c++11 -fvisibility=hidden
 
 #include "config.h"
 
-#include "ToyLocks.h"
+//#include "ToyLocks.h"
 #include <thread>
 #include <unistd.h>
 #include <wtf/CurrentTime.h>
@@ -275,7 +275,7 @@ int main(int, const char *[]) {
 
 //    time_target_in_seconds = 0.5;
 
-#ifdef WTF_LOCKS
+#ifdef EXTRA_LOCKS
     WTF::initializeThreading();
 #endif
 
@@ -293,7 +293,7 @@ int main(int, const char *[]) {
     typedef ttas_mutex test_mutex_1;
     test_mutex_1 m2;
 
-#ifdef WTF_LOCKS
+#ifdef EXTRA_LOCKS
 #define HAS_LOCK_2
     typedef WTF::Lock test_mutex_2;
 //#else
@@ -330,7 +330,7 @@ int main(int, const char *[]) {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, std::cout, "webkit_mutex single-threaded", 1, [=, &m2](int, std::mt19937&) mutable {
+    std_single_threaded = do_run(csv, std::cout, "webkit_mutex single-threaded", 1, [=, &m2](int, std::mt19937&) mutable {
         { std::unique_lock<test_mutex_2>(m3); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
@@ -420,7 +420,7 @@ int main(int, const char *[]) {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, std::cout, "webkit_mutex no contention", N, [=, &m3N](int i, std::mt19937&) mutable {
+    std_no_contention = do_run(csv, std::cout, "webkit_mutex no contention", N, [=, &m3N](int i, std::mt19937&) mutable {
         auto& m = m3N[i];
         { std::unique_lock<test_mutex_2> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
@@ -447,7 +447,7 @@ int main(int, const char *[]) {
         for (int i = 0; i < target_count; ++i) r.discard(1);
     }, target_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, std::cout, "webkit_mutex rare contention", N, [=, &m3N](int, std::mt19937& dr) mutable {
+    std_rare = do_run(csv, std::cout, "webkit_mutex rare contention", N, [=, &m3N](int, std::mt19937& dr) mutable {
         auto& m = m3N[dr() & mask];
         { std::unique_lock<test_mutex_2> l(m); }
         for (int i = 0; i < target_count; ++i) r.discard(1);
@@ -466,7 +466,7 @@ int main(int, const char *[]) {
         r.discard(1);
     }, shortest_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, std::cout, "webkit_mutex shortest sections", N, [=, &m3](int, std::mt19937&) mutable {
+    std_shortest = do_run(csv, std::cout, "webkit_mutex shortest sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         r.discard(1);
     }, shortest_count, cost);
@@ -484,7 +484,7 @@ int main(int, const char *[]) {
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, std::cout, "webkit_mutex short sections", N, [=, &m3](int, std::mt19937&) mutable {
+    std_short = do_run(csv, std::cout, "webkit_mutex short sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         for (int i = 0; i < short_count; ++i) r.discard(1);
     }, short_count, cost);
@@ -502,7 +502,7 @@ int main(int, const char *[]) {
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
 #ifdef HAS_LOCK_2
-    do_run(csv, std::cout, "webkit_mutex long sections", N, [=, &m3](int, std::mt19937&) mutable {
+    std_long = do_run(csv, std::cout, "webkit_mutex long sections", N, [=, &m3](int, std::mt19937&) mutable {
         std::unique_lock<test_mutex_2> l(m3);
         for (int i = 0; i < long_count; ++i) r.discard(1);
     }, long_count, cost);
