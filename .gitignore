@@ -33,3 +33,5 @@ x64/Debug/synchronic.ilk
 
 include/details/config
 *.db
+*.enc
+Report20161108-0853.vspx

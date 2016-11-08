@@ -153,6 +153,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="flaglock.hpp" />
     <ClInclude Include="include\n3998" />
     <ClInclude Include="include\synchronic" />
     <ClInclude Include="test.hpp" />
