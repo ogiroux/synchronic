@@ -56,15 +56,15 @@ namespace std {
 
 #if defined(_MSC_VER)
 	#if (defined(_M_X86) || defined(_M_X64))
-		#define __synchronic_x86
+		#define __atomic_x86
 	#elif defined(_M_ARM)
-		#define __synchronic_arm
+		#define __atomic_arm
 	#endif
 #elif defined(__GNUC__) 
 	#if (defined(__i386__) || defined(__x86_64__))
-		#define __synchronic_x86
+		#define __atomic_x86
 	#elif defined(__arm__)
-		#define __synchronic_arm
+		#define __atomic_arm
 	#endif
 #endif
 
@@ -85,7 +85,7 @@ namespace std {
 #ifdef __linux__
 			// On Linux, we make use of the kernel memory wait operations. These have been available for a long time.
 			template < class Rep, class Period>
-			timespec __synchronic_to_timespec(chrono::duration<Rep, Period> const& delta) {
+			timespec __atomic_to_timespec(chrono::duration<Rep, Period> const& delta) {
 				struct timespec ts;
 				ts.tv_sec = static_cast<long>(chrono::duration_cast<chrono::seconds>(delta).count());
 				ts.tv_nsec = static_cast<long>(chrono::duration_cast<chrono::nanoseconds>(delta).count());
@@ -96,7 +96,7 @@ namespace std {
 			}
 			template < class Rep, class Period>
 			void __atomic_wait_timed(const void* p, int v, const chrono::duration<Rep, Period>& t) {
-				syscall(SYS_futex, p, FUTEX_WAIT_PRIVATE, v, __synchronic_to_timespec(t), 0, 0);
+				syscall(SYS_futex, p, FUTEX_WAIT_PRIVATE, v, __atomic_to_timespec(t), 0, 0);
 			}
 			inline void __atomic_wake_one(const void* p) {
 				syscall(SYS_futex, p, FUTEX_WAKE_PRIVATE, 1, 0, 0, 0);
@@ -128,7 +128,7 @@ namespace std {
 
 //#undef __atomic_flag_fast_path
 
-#if defined(_MSC_VER) || !defined(__atomic_flag_fast_path)
+#if defined(__arm__) || defined(_MSC_VER) || !defined(__atomic_flag_fast_path)
 			// A simple exponential back-off helper that is designed to cover the space between (1<<__magic_number_3) and __magic_number_4
 			class __atomic_exponential_backoff {
 				int microseconds = 50;
@@ -168,7 +168,7 @@ namespace std {
 					if(__atomic_expect(!success && !retcode,0))
 						retcode = test_and_set_slow(old, order, notify);
 #endif
-#ifdef __synchronic_arm
+#ifdef __atomic_arm
 					if(!retcode) {
 						__asm__ __volatile__(
 							"   dsb\n"
@@ -212,7 +212,7 @@ namespace std {
 #else
 				atom.store(0, order);
 #endif
-#ifdef __synchronic_arm
+#ifdef __atomic_arm
 				__asm__ __volatile__(
 					"   dsb\n"
 					"   sev"
@@ -246,25 +246,21 @@ namespace std {
 				base_t const expectbit = (set ? valubit : 0);
 				if (__atomic_expect(old == expectbit, 1))
 					return;
-				for (int i = 0; i < 50; ++i) {
-					if ((old & valubit) == expectbit) break;
-					if (i > 4) __atomic_yield();
-#ifdef __synchronic_arm
-					base_t tmp;
-					__asm__ __volatile__(
-						"ldrex %0, [%1]\n"
-						"cmp %0, %2\n"
-						"it eq\n"
-						"wfeeq.n\n"
-						"nop.w\n"
-						: "=&r" (tmp) : "r" (&atom), "r" (old) : "cc"
-					);
-					old = tmp;
-					atomic_thread_fence(order);
-#else
-					old = atom.load(order);
+#ifdef __atomic_arm
+                                if ((old & valubit) != expectbit)                                
+                                    for (int i = 0; i < 4; ++i) {
+                                        base_t const tmp = old;
+                                        __asm__ __volatile__(
+                                             "ldrex %0, [%1]\n"
+                                             "cmp %0, %2\n"
+                                             "it eq\n"
+                                             "wfeeq.n\n"
+                                             "nop.w\n"
+                                             : "=&r" (old) : "r" (&atom), "r" (tmp) : "cc"
+                                         );
+                                         if ((old & valubit) == expectbit) { atomic_thread_fence(order); break; }
+                                    }
 #endif
-				}
 				if (__atomic_expect(old != expectbit, 0))
 					wait_slow(old, expectbit, order);
 
@@ -272,33 +268,34 @@ namespace std {
 
 			__atomic_gcc_dont_inline void wait_slow(base_t old, base_t expectbit, memory_order order) const noexcept {
 
-#if defined(_MSC_VER) && defined(__atomic_flag_fast_path)
+                                if ((old & valubit) != expectbit)
+                                    for (int i = 0; i < 32; ++i) {
+                                        __atomic_yield();
+                                        old = atom.load(order);
+                                        if ((old & valubit) == expectbit) break;
+                                    }
 				if ((old & valubit) != expectbit) {
 					__atomic_exponential_backoff b;
-					for (int i = 0; i < 4; ++i) {
+#ifdef __atomic_flag_fast_path
+					for (int i = 0; i < 2; ++i) {
+#else
+                                        while(1) {
+#endif
 						b.sleep();
 						old = atom.load(order);
 						if ((old & valubit) == expectbit) break;
 					}
 				}
-#endif
-				if ((old & valubit) != expectbit) {
-#ifndef __atomic_flag_fast_path
-					__atomic_exponential_backoff b;
-#endif
-					while(1) {
 #ifdef __atomic_flag_fast_path
+				if ((old & valubit) != expectbit) {
+					while(1) {
 						old = atom.fetch_or(contbit, memory_order_relaxed) | contbit;
 						if ((old & valubit) == expectbit) break;
 						__atomic_wait(&atom, old);
-#else
-						b.sleep();
-#endif
 						old = atom.load(order);
 						if ((old & valubit) == expectbit) break;
 					}
 				}
-#ifdef __atomic_flag_fast_path
 				while (old & lockbit)
 					old = atom.load(memory_order_relaxed);
 #endif
@@ -351,7 +348,7 @@ namespace std {
 
 		void lock() {
 
-			while (__synchronic_expect(f.test_and_set(std::memory_order_acquire), 0))
+			while (__atomic_expect(f.test_and_set(std::memory_order_acquire), 0))
 				//  ;                                       //this is the C++17 version
 				f.wait(false, std::memory_order_relaxed);   //this is the C++20 version maybe!
 		}
