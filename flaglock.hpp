@@ -48,46 +48,42 @@ namespace std {
 	namespace experimental {
 		inline namespace concurrency_v2 {
 
-			// On Linux, we use sched_yield and punt oversubscribed conditions to wait operations.
 #ifdef __linux__
 			inline void __atomic_yield() { sched_yield(); }
 #else
-			// Elsewhere, we use the Standard yield for lack anything better.
 			inline void __atomic_yield() { this_thread::yield(); }
 #endif
 
-			// On x86, 'rep;nop' / 'pause' is a quick yield for hyper-threads.
 #if defined(_MSC_VER)
-#if (defined(_M_X86) || defined(_M_X64))
-#define __synchronic_x86
-#elif defined(_M_ARM)
-#define __synchronic_arm
-#endif
+	#if (defined(_M_X86) || defined(_M_X64))
+		#define __synchronic_x86
+	#elif defined(_M_ARM)
+		#define __synchronic_arm
+	#endif
 #elif defined(__GNUC__) 
-#if (defined(__i386__) || defined(__x86_64__))
-#define __synchronic_x86
-#elif defined(__arm__)
-#define __synchronic_arm
-#endif
+	#if (defined(__i386__) || defined(__x86_64__))
+		#define __synchronic_x86
+	#elif defined(__arm__)
+		#define __synchronic_arm
+	#endif
 #endif
 
 #ifdef __GNUC__
-#define __atomic_gcc_inline __attribute__((always_inline))
+	#define __atomic_gcc_inline __attribute__((always_inline))
+	#define __atomic_gcc_dont_inline __attribute__((noinline))
 #else
-#define __atomic_gcc_inline
+	#define __atomic_gcc_inline inline
+	#define __atomic_gcc_dont_inline
 #endif
 
-			// On GCC (and Clang) we provide some expected profile information.
 #if defined(__GNUC__)
-#define __atomic_expect __builtin_expect
+	#define __atomic_expect __builtin_expect
 #else
-			// For other compilers, we just lose this information.
-#define __atomic_expect(c,e) (c)
+	#define __atomic_expect(c,e) (c)
 #endif
 
-			// On Linux, we make use of the kernel memory wait operations. These have been available for a long time.
 #ifdef __linux__
-			// These definitions merely wrap the Linux primitives for use below.
+			// On Linux, we make use of the kernel memory wait operations. These have been available for a long time.
 			template < class Rep, class Period>
 			timespec __synchronic_to_timespec(chrono::duration<Rep, Period> const& delta) {
 				struct timespec ts;
@@ -108,12 +104,11 @@ namespace std {
 			inline void __atomic_wake_all(const void* p) {
 				syscall(SYS_futex, p, FUTEX_WAKE_PRIVATE, INT_MAX, 0, 0, 0);
 			}
-#define __atomic_flag_fast_path
+	#define __atomic_flag_fast_path
 #endif // __linux__
 
-			// On Windows, we make use of the kernel memory wait operations as well. These first became available with Windows 8.
 #if defined(WIN32) && _WIN32_WINNT >= 0x0602
-			// These definitions merely wrap the Windows primitives for use below.
+			// On Windows, we make use of the kernel memory wait operations as well. These first became available with Windows 8.
 			template <class V>
 			void __atomic_wait(const void* p, V v) {
 				WaitOnAddress((PVOID)p, (PVOID)&v, sizeof(v), -1);
@@ -128,7 +123,7 @@ namespace std {
 			inline void __atomic_wake_all(const void* p) {
 				WakeByAddressAll((PVOID)p);
 			}
-#define __atomic_flag_fast_path
+	#define __atomic_flag_fast_path
 #endif // defined(WIN32) && _WIN32_WINNT >= 0x0602
 
 //#undef __atomic_flag_fast_path
@@ -165,52 +160,31 @@ namespace std {
 
 				mutable std::atomic<base_t> atom;
 
-				bool test_and_set(memory_order order = memory_order_seq_cst, atomic_notify notify = atomic_notify::all) noexcept {
-
+				__atomic_gcc_inline bool test_and_set(memory_order order = memory_order_seq_cst, atomic_notify notify = atomic_notify::all) noexcept {
 					base_t old = 0;
-					if (__atomic_expect(atom.compare_exchange_strong(old, valubit, order, memory_order_relaxed), 1))
-						;
-					else
-#ifndef __atomic_flag_fast_path
-						return true;
-#else
-						while ((old & valubit) == 0) {
-							old &= contbit;
-							base_t const lock = (old & contbit ? lockbit : 0);
-							if (atom.compare_exchange_weak(old, valubit | lock, order, memory_order_relaxed)) {
-								if (lock) {
-									switch (notify) {
-									case atomic_notify::all: __atomic_wake_all(&atom); break;
-									case atomic_notify::one: __atomic_wake_one(&atom); break;
-									case atomic_notify::none: break;
-									}
-									atom.fetch_and(~lock, memory_order_relaxed);
-								}
-								break;
-							}
-						}
+					bool const success = atom.compare_exchange_weak(old, valubit, order, memory_order_relaxed);
+					bool retcode = (old & valubit) == 1;
+#ifdef __atomic_flag_fast_path
+					if(__atomic_expect(!success && !retcode,0))
+						retcode = test_and_set_slow(old, order, notify);
 #endif
 #ifdef __synchronic_arm
-					__asm__ __volatile__(
-						"   dsb\n"
-						"   sev"
-					);
+					if(!retcode) {
+						__asm__ __volatile__(
+							"   dsb\n"
+							"   sev"
+						);
+					}
 #endif
-					return (old & valubit) == 1;
+					return retcode;
 				}
-			void clear(memory_order order = memory_order_seq_cst, atomic_notify notify = atomic_notify::all) noexcept {
 
-#ifndef __atomic_flag_fast_path
-				atom.store(0, order);
-#else
-				base_t old = valubit;
-				if (__atomic_expect(atom.compare_exchange_strong(old, 0, order, memory_order_relaxed), 1))
-					;
-				else 
-					while (1) {
-						old &= (contbit | valubit);
-						base_t const lock = (old & contbit) ? lockbit : 0;
-						if (atom.compare_exchange_weak(old, lock, order, memory_order_relaxed)) {
+#ifdef __atomic_flag_fast_path
+				__atomic_gcc_dont_inline bool test_and_set_slow(base_t old, memory_order order, atomic_notify notify) noexcept {
+					while ((old & valubit) == 0) {
+						old &= contbit;
+						base_t const lock = (old & contbit ? lockbit : 0);
+						if (atom.compare_exchange_weak(old, valubit | lock, order, memory_order_relaxed)) {
 							if (lock) {
 								switch (notify) {
 								case atomic_notify::all: __atomic_wake_all(&atom); break;
@@ -219,9 +193,24 @@ namespace std {
 								}
 								atom.fetch_and(~lock, memory_order_relaxed);
 							}
-							break;
+							return false;
 						}
 					}
+					return true;
+				}
+#endif
+
+			__atomic_gcc_inline void clear(memory_order order = memory_order_seq_cst, atomic_notify notify = atomic_notify::all) noexcept {
+#ifdef __atomic_flag_fast_path
+				base_t old = valubit;
+				bool const success = atom.compare_exchange_weak(old, 0, order, memory_order_relaxed);
+				if (__atomic_expect(!success, 0)) {
+					bool const success2 = ((old & ~valubit) == 0) && atom.compare_exchange_weak(old, 0, order, memory_order_relaxed);
+					if (__atomic_expect(!success2, 0))
+						clear_slow(old, order, notify);
+				}
+#else
+				atom.store(0, order);
 #endif
 #ifdef __synchronic_arm
 				__asm__ __volatile__(
@@ -231,15 +220,35 @@ namespace std {
 #endif
 			}
 
-			void wait(bool set, memory_order order = memory_order_seq_cst) const noexcept {
+#ifdef __atomic_flag_fast_path
+			__atomic_gcc_dont_inline void clear_slow(base_t old, memory_order order, atomic_notify notify) noexcept {
+				while (1) {
+					old &= (contbit | valubit);
+					base_t const lock = (old & contbit) ? lockbit : 0;
+					if (atom.compare_exchange_weak(old, lock, order, memory_order_relaxed)) {
+						if (lock) {
+							switch (notify) {
+							case atomic_notify::all: __atomic_wake_all(&atom); break;
+							case atomic_notify::one: __atomic_wake_one(&atom); break;
+							case atomic_notify::none: break;
+							}
+							atom.fetch_and(~lock, memory_order_relaxed);
+						}
+						break;
+					}
+				}
+			}
+#endif
+
+			__atomic_gcc_inline void wait(bool set, memory_order order = memory_order_seq_cst) const noexcept {
 
 				base_t old = atom.load(order);
 				base_t const expectbit = (set ? valubit : 0);
 				if (__atomic_expect(old == expectbit, 1))
 					return;
-				for (int i = 0; i < 80; ++i) {
+				for (int i = 0; i < 50; ++i) {
 					if ((old & valubit) == expectbit) break;
-					if (i>16) __atomic_yield();
+					if (i > 4) __atomic_yield();
 #ifdef __synchronic_arm
 					base_t tmp;
 					__asm__ __volatile__(
@@ -256,6 +265,13 @@ namespace std {
 					old = atom.load(order);
 #endif
 				}
+				if (__atomic_expect(old != expectbit, 0))
+					wait_slow(old, expectbit, order);
+
+			}
+
+			__atomic_gcc_dont_inline void wait_slow(base_t old, base_t expectbit, memory_order order) const noexcept {
+
 #if defined(_MSC_VER) && defined(__atomic_flag_fast_path)
 				if ((old & valubit) != expectbit) {
 					__atomic_exponential_backoff b;
